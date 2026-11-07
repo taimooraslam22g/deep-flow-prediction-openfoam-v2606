@@ -18,8 +18,8 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 2. Port the data generation pipeline to OpenFOAM v2606 | Done |
 | 3. First simulation and training sample | Done (about 95 s per sample on a laptop) |
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
-| 5. Train the U-Net and reproduce the paper's error numbers | To do |
-| 6. Compare my results with the paper | To do |
+| 5. Train the U-Net and reproduce the paper's error numbers | First run done (CPU, 48 min). See [Results](#results) |
+| 6. Compare my results with the paper | First comparison done. Next: repeat seeds and match the paper's training length |
 | 7. Extension: inverted airfoil in ground effect | Planned |
 
 ### Log
@@ -30,6 +30,10 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   ([TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791),
   1.3 GB): 6,400 training and 90 test samples. Checksum verified. The training
   code expects it in `Deep-Flow-Prediction/data/train` and `data/test`.
+- **2026-11-07**: First training run on CPU (Ryzen 7 7730U, PyTorch 2.15 CPU).
+  U-Net with `expo = 5` (2.33M parameters) trained for 10k iterations in 48 min.
+  Test error on 90 unseen airfoils: 3.17% overall, 2.61% velocity, 16.6%
+  pressure, close to the paper (see Results).
 
 ---
 
@@ -56,6 +60,46 @@ about 95 s.
 *First sample generated with this setup: airfoil `s4061` at about 22° to the
 flow, |U| = 30 m/s. The flow separates under the airfoil, visible as reversed
 flow (blue in Ux) and a strong low-pressure region.*
+
+---
+
+## Results
+
+### Run 1: U-Net, `expo = 5`, `data_6k`, CPU
+
+| Setting | This run | Paper (best model, Sec. 4) |
+|---|---|---|
+| Trainable parameters | 2.33M | 30.9M |
+| Training samples | 6,000 (+400 validation) | 12,800 |
+| Training iterations | 10,000 (repo default) | 80,000 |
+| Hardware / time | Laptop CPU, 48 min | GPU |
+
+Relative error on the **90 unseen test airfoils**
+(`runTestCpu.py`, mean of |prediction − CFD| / |CFD|):
+
+| Quantity | This run | Paper, largest model, 12.8k samples |
+|---|---|---|
+| Velocity | **2.61%** | 2.15% (Ux), 2.6% (Uy) |
+| Pressure | **16.6%** | 14.76% |
+| Combined | **3.17%** | 2.6% |
+
+For reference, the paper's *smallest* model (123k parameters) reached 3.3% with
+12.8k samples.
+
+**Interpretation:** the first run lands where the paper's scaling study says it
+should. It is between the paper's smallest and largest models, while using half
+the data, an eighth of the iterations, and a laptop CPU. Pressure has a much
+higher relative error than velocity, as in the paper: pressure values are often
+small, so small absolute errors become large relative errors.
+
+**Caveats:** this is a single training run. The paper averages five runs with
+different random seeds. The next step is to repeat this run with several seeds
+and to train for longer.
+
+![Learning curve](results/learning_curve_expo5_6k.png)
+
+*Training and validation L1 loss per epoch. Both fall steadily and end close
+together (0.0060 / 0.0053), so the model is not overfitting.*
 
 ---
 
