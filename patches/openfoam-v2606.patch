@@ -1,0 +1,63 @@
+diff --git a/data/OpenFOAM/0/p b/data/OpenFOAM/0/p
+index 488a929..88cc546 100644
+--- a/data/OpenFOAM/0/p
++++ b/data/OpenFOAM/0/p
+@@ -23,21 +23,25 @@ boundaryField
+     inlet
+     {
+         type            freestreamPressure;
++        freestreamValue uniform 0;
+     }
+ 
+     exit
+     {
+         type            freestreamPressure;
++        freestreamValue uniform 0;
+     }
+ 
+     top
+     {
+         type            freestreamPressure;
++        freestreamValue uniform 0;
+     }
+ 
+     bottom
+     {
+         type            freestreamPressure;
++        freestreamValue uniform 0;
+     }
+ 
+     aerofoil
+diff --git a/data/dataGen.py b/data/dataGen.py
+index 28c1c62..6e0eda4 100644
+--- a/data/dataGen.py
++++ b/data/dataGen.py
+@@ -42,7 +42,7 @@ def genMesh(airfoilFile):
+                 line = line.replace("LAST_POINT_INDEX", "{}".format(pointIndex-1))
+                 outFile.write(line)
+ 
+-    if os.system("gmsh airfoil.geo -3 -o airfoil.msh > /dev/null") != 0:
++    if os.system("gmsh airfoil.geo -3 -format msh2 -o airfoil.msh > /dev/null") != 0:
+         print("error during mesh creation!")
+         return(-1)
+ 
+@@ -80,7 +80,7 @@ def runSim(freestreamX, freestreamY):
+ 
+     os.system("./Allclean && simpleFoam > foam.log")
+ 
+-def outputProcessing(basename, freestreamX, freestreamY, dataDir=output_dir, pfile='OpenFOAM/postProcessing/internalCloud/500/cloud_p.xy', ufile='OpenFOAM/postProcessing/internalCloud/500/cloud_U.xy', res=128, imageIndex=0): 
++def outputProcessing(basename, freestreamX, freestreamY, dataDir=output_dir, pfile='OpenFOAM/postProcessing/internalCloud/500/cloud_p_U.xy', ufile='OpenFOAM/postProcessing/internalCloud/500/cloud_p_U.xy', res=128, imageIndex=0): 
+     # output layout channels:
+     # [0] freestream field X + boundary
+     # [1] freestream field Y + boundary
+@@ -116,8 +116,8 @@ def outputProcessing(basename, freestreamX, freestreamY, dataDir=output_dir, pfi
+             xf = (x / res - 0.5) * 2 + 0.5
+             yf = (y / res - 0.5) * 2
+             if abs(ar[curIndex][0] - xf)<1e-4 and abs(ar[curIndex][1] - yf)<1e-4:
+-                npOutput[4][x][y] = ar[curIndex][3]
+-                npOutput[5][x][y] = ar[curIndex][4]
++                npOutput[4][x][y] = ar[curIndex][4]
++                npOutput[5][x][y] = ar[curIndex][5]
+                 curIndex += 1
+             else:
+                 npOutput[4][x][y] = 0

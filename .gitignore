@@ -1,0 +1,12 @@
+# Original repo is cloned locally, not committed (see README)
+Deep-Flow-Prediction/
+
+# Large data and model files
+*.npz
+*.tar.gz
+data/
+models/
+
+# Python
+__pycache__/
+*.pyc
