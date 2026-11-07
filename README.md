@@ -17,7 +17,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 1. Environment (Docker + OpenFOAM v2606 + gmsh + Python) | Done |
 | 2. Port the data generation pipeline to OpenFOAM v2606 | Done |
 | 3. First simulation and training sample | Done (about 95 s per sample on a laptop) |
-| 4. Download the authors' precomputed dataset | Next |
+| 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | To do |
 | 6. Compare my results with the paper | To do |
 | 7. Extension: inverted airfoil in ground effect | Planned |
@@ -26,6 +26,10 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
   incompatibilities between the original OpenFOAM 5 setup and OpenFOAM v2606
   (see below). Generated and plotted the first training sample.
+- **2026-11-07**: Downloaded the authors' `data_6k` dataset
+  ([TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791),
+  1.3 GB): 6,400 training and 90 test samples. Checksum verified. The training
+  code expects it in `Deep-Flow-Prediction/data/train` and `data/test`.
 
 ---
 
