@@ -130,3 +130,9 @@ Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 
 Airfoil coordinates come from the UIUC Airfoil Coordinates Database
 (https://m-selig.ae.illinois.edu/ads/coord_database.html).
+
+## License
+
+[Apache License 2.0](LICENSE), the same license as the original
+[Deep-Flow-Prediction](https://github.com/thunil/Deep-Flow-Prediction) code
+that the patch in this repo modifies.
