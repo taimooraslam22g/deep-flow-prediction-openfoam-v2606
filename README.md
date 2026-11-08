@@ -19,7 +19,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 3. First simulation and training sample | Done (about 95 s per sample on a laptop) |
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
-| 6. Compare my results with the paper | 5-seed mean ± std done. Next: match the paper's training length (80k iterations) |
+| 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
 | 7. Extension: inverted airfoil in ground effect | Planned |
 
 ### Log
@@ -38,6 +38,9 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   (`scripts/run_seeds.ps1`, 3 h 55 min unattended). Combined test error
   3.42 ± 0.18%, velocity 2.85 ± 0.13%, pressure 17.06 ± 0.94%. Run 1 (3.17%)
   was at the lucky end of the spread.
+- **2026-11-08**: Overnight run with the paper's training length (80k
+  iterations, 6 h on CPU). Combined error 2.96%, pressure 14.86%, velocity
+  2.45%. Pressure and velocity now match the paper's best model.
 
 ---
 
@@ -129,8 +132,34 @@ also reports averages over 5 runs.
 - Pressure varies most between seeds (±0.94), as expected from its higher
   relative error.
 
-**Next:** train for 80k iterations, as in the paper, to see how much of the
-gap comes from training length alone.
+### Run 3: same setup, 80k iterations (paper's training length)
+
+Same model, data and seed (1) as above. Only the training length changes, from
+10k to 80k iterations (133 epochs, 6 h 3 min on the laptop CPU).
+
+| Quantity | 10k iterations, seed 1 | 10k, 5-seed mean | **80k iterations, seed 1** | Paper, largest model |
+|---|---|---|---|---|
+| Pressure | 17.41% | 17.06% | **14.86%** | 14.76% |
+| Velocity | 2.89% | 2.85% | **2.45%** | about 2.4% |
+| Combined | 3.50% | 3.42% | **2.96%** | 2.6% |
+
+**What this shows:**
+- Training 8× longer cuts the combined error by about 15% (3.50 → 2.96%).
+  Pressure and velocity now **match the paper's best model** almost exactly,
+  with 13× fewer parameters and half the training data.
+- The remaining gap in the combined number (2.96 vs 2.6%) is small.
+- The learning curve below shows the limit of `data_6k`: after about epoch 90
+  the validation loss flattens (0.0043) while the training loss keeps falling
+  (0.0031). The model is starting to memorise the training set, so **more
+  data**, not more training, is the next lever.
+
+![Learning curve, 80k iterations](results/learning_curve_expo5_80k.png)
+
+*Training and validation L1 loss over 133 epochs (80k iterations). A gap
+opens after about epoch 90: mild overfitting on 6,000 training samples.*
+
+**Caveat:** this is one seed. Given the ±0.18 spread between seeds at 10k, the
+improvement from 3.42% to 2.96% is well beyond seed noise.
 
 ![Learning curve](results/learning_curve_expo5_6k.png)
 
