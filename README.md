@@ -18,8 +18,8 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 2. Port the data generation pipeline to OpenFOAM v2606 | Done |
 | 3. First simulation and training sample | Done (about 95 s per sample on a laptop) |
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
-| 5. Train the U-Net and reproduce the paper's error numbers | First run done (CPU, 48 min). See [Results](#results) |
-| 6. Compare my results with the paper | First comparison done. Next: repeat seeds and match the paper's training length |
+| 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
+| 6. Compare my results with the paper | 5-seed mean ± std done. Next: match the paper's training length (80k iterations) |
 | 7. Extension: inverted airfoil in ground effect | Planned |
 
 ### Log
@@ -34,6 +34,10 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   U-Net with `expo = 5` (2.33M parameters) trained for 10k iterations in 48 min.
   Test error on 90 unseen airfoils: 3.17% overall, 2.61% velocity, 16.6%
   pressure, close to the paper (see Results).
+- **2026-11-07**: Repeated the same training with 5 fixed random seeds
+  (`scripts/run_seeds.ps1`, 3 h 55 min unattended). Combined test error
+  3.42 ± 0.18%, velocity 2.85 ± 0.13%, pressure 17.06 ± 0.94%. Run 1 (3.17%)
+  was at the lucky end of the spread.
 
 ---
 
@@ -92,9 +96,41 @@ the data, an eighth of the iterations, and a laptop CPU. Pressure has a much
 higher relative error than velocity, as in the paper: pressure values are often
 small, so small absolute errors become large relative errors.
 
-**Caveats:** this is a single training run. The paper averages five runs with
-different random seeds. The next step is to repeat this run with several seeds
-and to train for longer.
+**Caveat:** a single training run can be lucky or unlucky. See the repeated
+seeds below.
+
+### Run 2: same setup, 5 random seeds
+
+Same settings as Run 1, trained 5 times with seeds 1–5
+(`scripts/run_seeds.ps1`, summary from `scripts/summarize_seeds.py`). The paper
+also reports averages over 5 runs.
+
+| Seed | Pressure % | Velocity % | Combined % |
+|---|---|---|---|
+| 1 | 17.41 | 2.89 | 3.50 |
+| 2 | 17.12 | 2.75 | 3.33 |
+| 3 | 15.71 | 2.68 | 3.17 |
+| 4 | 18.29 | 2.99 | 3.63 |
+| 5 | 16.78 | 2.91 | 3.48 |
+| **Mean ± std** | **17.06 ± 0.94** | **2.85 ± 0.13** | **3.42 ± 0.18** |
+| Paper, largest model | 14.76 | about 2.4 | 2.6 |
+| Paper, smallest model | | | 3.3 |
+
+(std = sample standard deviation over the 5 runs.)
+
+**What this shows:**
+- The result is **stable**. The combined error varies by only ±0.18 percentage
+  points between seeds, so the gap to the paper is real and not seed noise.
+- Run 1 (3.17%) was on the good side of the spread. The honest number for this
+  setup is **3.42 ± 0.18%**.
+- That is about 0.8 points above the paper's best model, which has 13× more
+  parameters, 2× more data and 8× more training iterations. It is close to the
+  paper's smallest model.
+- Pressure varies most between seeds (±0.94), as expected from its higher
+  relative error.
+
+**Next:** train for 80k iterations, as in the paper, to see how much of the
+gap comes from training length alone.
 
 ![Learning curve](results/learning_curve_expo5_6k.png)
 
@@ -156,6 +192,9 @@ python3 /work/scripts/view_sample.py train/<file>.npz /work/results/sample.png
 Dockerfile                  OpenFOAM v2606 + gmsh + Python environment
 patches/openfoam-v2606.patch  fixes to the original code for OpenFOAM v2606
 scripts/view_sample.py      plots all six channels of a training sample
+scripts/plot_learning_curve.py  plots training/validation loss
+scripts/run_seeds.ps1       trains + tests with several seeds, unattended
+scripts/summarize_seeds.py  mean ± std table over the seed runs
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```
