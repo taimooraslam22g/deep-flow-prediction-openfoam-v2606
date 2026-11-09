@@ -56,8 +56,9 @@ def to_upright(xy, alpha_deg):
 
 def top_side(name):
     """A function telling whether upright (x, y) points lie on the upper (suction) side,
-    using the camber line of the airfoil."""
-    file = os.path.join(AIRFOIL_DIR, name + ".dat")
+    using the camber line of the airfoil. name is an airfoil in the UIUC folder (or a
+    NACA 4-digit name), or the path of an airfoil file."""
+    file = name if os.path.isfile(name) else os.path.join(AIRFOIL_DIR, name + ".dat")
     ar = load_airfoil(file if os.path.isfile(file) else os.path.join(AIRFOIL_DIR, name))
     le = np.argmin(ar[:, 0])
     up, lo = ar[:le + 1][::-1], ar[le:]  # both from the leading to the trailing edge

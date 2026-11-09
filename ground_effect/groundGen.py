@@ -215,18 +215,24 @@ def tidy_trailing_edge(ar):
     return ar, abs(gap[1]) > abs(gap[0])
 
 
-def place_airfoil(ar, alpha_deg, h):
+def place_airfoil(ar, alpha_deg, h, h_alpha_deg=None):
     """Turn the airfoil upside down, rotate it, and work out where the ground goes.
 
+    The ride height h is the gap between the lowest point and the ground. By default it is
+    measured with the wing at alpha. With h_alpha_deg, it is measured with the wing at that
+    incidence, and the wing is then rotated to alpha about the quarter chord, as in wind
+    tunnel tests that set the height first (Zerihan 2001).
     Returns the new (x, y) points and the y position of the ground."""
     x = ar[::-1, 0]   # reversed order keeps the points running anticlockwise, as before
     y = -ar[::-1, 1]  # upside down: the suction side now faces the ground
-    a = np.radians(alpha_deg)
-    # rotate about the quarter chord; positive alpha lifts the trailing edge
-    xr = 0.25 + (x - 0.25) * np.cos(a) - y * np.sin(a)
-    yr = (x - 0.25) * np.sin(a) + y * np.cos(a)
-    ground_y = yr.min() - h  # ride height = gap between the lowest point and the ground
-    return np.column_stack([xr, yr]), ground_y
+
+    def rotate(deg):  # about the quarter chord; positive alpha lifts the trailing edge
+        a = np.radians(deg)
+        return 0.25 + (x - 0.25) * np.cos(a) - y * np.sin(a), (x - 0.25) * np.sin(a) + y * np.cos(a)
+
+    xr, yr = rotate(alpha_deg)
+    lowest = yr.min() if h_alpha_deg is None else rotate(h_alpha_deg)[1].min()
+    return np.column_stack([xr, yr]), lowest - h
 
 
 # ---------------------------------------------------------------- case files
@@ -657,6 +663,9 @@ def main():
     p.add_argument("--airfoil", help="airfoil file, e.g. naca23012.dat, or nacaXXXX (default: random)")
     p.add_argument("--alpha", type=float, help="angle of attack in degrees (default: random)")
     p.add_argument("--h", type=float, help="ride height as a fraction of the chord (default: random)")
+    p.add_argument("--h-alpha", type=float,
+                   help="measure the ride height with the wing at this incidence (degrees), then rotate it "
+                        "to --alpha about the quarter chord, as in wind tunnel tests (default: at --alpha)")
     p.add_argument("--U", type=float, help="air speed in m/s (default: random)")
     p.add_argument("--free-air", action="store_true", help="no ground (for validation)")
     p.add_argument("--bl", action=argparse.BooleanOptionalAction, default=True,
@@ -712,7 +721,8 @@ def main():
         U = args.U if args.U is not None else r_U
 
         basename = os.path.splitext(os.path.basename(airfoil))[0]
-        where = "free air" if args.free_air else f"h/c {h:.3f}"
+        where = "free air" if args.free_air else f"h/c {h:.3f}" + (
+            f" (measured at {args.h_alpha:g} deg)" if args.h_alpha is not None else "")
         print(f"Run {n}: {basename}, alpha {alpha:+.2f} deg, {where}, U {U:.1f} m/s"
               f" ({args.solver}, nuTilda {args.nutilda:g} with {args.nutilda_scheme}, {mesh_text})")
         start = time.time()
@@ -735,7 +745,7 @@ def main():
         blunt = False
         if args.bl:
             ar, blunt = tidy_trailing_edge(ar)
-        pts, ground_y = place_airfoil(ar, alpha, 0.0 if args.free_air else h)
+        pts, ground_y = place_airfoil(ar, alpha, 0.0 if args.free_air else h, args.h_alpha)
         if args.free_air:
             ground_y = -args.domain
         elif ground_y < -0.95:
@@ -803,6 +813,7 @@ def main():
         saved = os.path.join(args.out, sub, name + ".npz")
         np.savez_compressed(saved, a=grid,
                             airfoil=basename, alpha=alpha, h=h, U=U,
+                            h_alpha=np.nan if args.h_alpha is None else args.h_alpha,
                             ground_y=np.nan if args.free_air else ground_y,
                             Cl=cl, Cd=cd, cl_range=cl_range, cd_oscillation=cd_osc,
                             converged=converged, reversed_flow=rev, max_residual=max_res,
