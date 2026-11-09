@@ -13,3 +13,6 @@ __pycache__/
 
 # Python virtual environment
 .venv/
+
+# Ground-effect simulation work folders (recreated for every run)
+ground_effect/work/

@@ -1,0 +1,37 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  Pressure and wall shear stress on the airfoil surface, written once at the
+  end of the run to postProcessing/surfaceData/<time>/. groundGen.py stores
+  them in the sample, and validate_les.py turns them into Cp and Cf.
+  wallShearStress1 must come first: it computes the field that surfaceData samples.
+\*---------------------------------------------------------------------------*/
+
+wallShearStress1
+{
+    type            wallShearStress;
+    libs            (fieldFunctionObjects);
+    patches         (aerofoil);
+    writeControl    writeTime;
+    log             false;
+}
+
+surfaceData
+{
+    type            surfaces;
+    libs            (sampling);
+    writeControl    writeTime;
+    surfaceFormat   raw;
+    fields          (p wallShearStress);
+    interpolationScheme cellPoint;
+
+    surfaces
+    {
+        aerofoil
+        {
+            type        patch;
+            patches     (aerofoil);
+            interpolate false;   // values at the face centres, no interpolation
+        }
+    }
+}
+
+// ************************************************************************* //

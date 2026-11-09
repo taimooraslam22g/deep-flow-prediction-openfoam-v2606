@@ -20,7 +20,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | Planned |
+| 7. Extension: inverted airfoil in ground effect | In progress: setup works, convergence study done. Next: validate against LES, then generate the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
@@ -41,6 +41,13 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 - **2026-11-08**: Overnight run with the paper's training length (80k
   iterations, 6 h on CPU). Combined error 2.96%, pressure 14.86%, velocity
   2.45%. Pressure and velocity now match the paper's best model.
+- **2026-11-08**: Started the ground-effect extension
+  ([`ground_effect/`](ground_effect/)): an inverted airfoil above a moving
+  ground, saved in the same sample format as the original dataset.
+- **2026-11-09**: First ground-effect simulations. 500 solver iterations (the
+  original setting) leave Cl about 14% short of its converged value. The
+  incoming turbulence level changes downforce by 9% and halves drag (see
+  [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress)).
 
 ---
 
@@ -161,6 +168,57 @@ opens after about epoch 90: mild overfitting on 6,000 training samples.*
 **Caveat:** this is one seed. Given the ±0.18 spread between seeds at 10k, the
 improvement from 3.42% to 2.96% is well beyond seed noise.
 
+---
+
+## Extension: inverted airfoil in ground effect (in progress)
+
+This is the next step towards F1 front wings: the same kind of 2D RANS data,
+but with the airfoil upside down above a moving ground. The code is in
+[`ground_effect/`](ground_effect/).
+
+| Change from the original setup | Why |
+|---|---|
+| Airfoil turned upside down | It makes downforce, like a front wing |
+| Angle of attack set by rotating the airfoil (positive = trailing edge up), with the air flowing parallel to the ground | With a ground, the incoming air must flow parallel to it |
+| Ground placed a distance *h* (the ride height) below the airfoil's lowest point | The new design parameter |
+| Ground moves at the air speed | Seen from the car, the road moves backwards at the same speed as the air, so the ground has no boundary layer |
+| Finer mesh in the gap (gmsh Box field, about 10 cells across it) | The strongest flow is in the gap |
+| Same 6 × 128 × 128 sample format, with the ground in the mask channel | The same U-Net code can train on it |
+| Cl, Cd, residuals, Cl history and surface pressure / wall shear stress stored with every sample | Physics checks and data quality control |
+
+![First ground-effect sample](results/ground_first_sample.png)
+
+*NACA 23012 upside down at 4°, ride height 0.2 chords, 30 m/s, converged,
+incoming nuTilda = 3e-5. The air speeds up to about 55 m/s in the gap, and the
+low pressure there creates the downforce (Cl = −1.31).*
+
+### Convergence and turbulence-level test (one case)
+
+The same case run with two levels of incoming turbulence, up to 3000 iterations:
+
+| Incoming turbulence | Stopped at | Cl at 500 iterations | Final Cl | Final Cd | Cl within 0.5% of its last value from |
+|---|---|---|---|---|---|
+| nuTilda = 0.14 m²/s (original dataset) | 1342 (residuals below 1e-5) | −1.023 | −1.194 | 0.0241 | iteration 1210 |
+| nuTilda = 3e-5 m²/s (3 ν, the usual Spalart–Allmaras value) | 3000 (the nuTilda residual stays at 1e-3) | −1.137 | −1.306 | 0.0126 | iteration 1429 |
+
+![Convergence test](results/ground_convergence_test.png)
+
+**What this shows:**
+- **500 iterations is not enough in ground effect.** The original dataset uses
+  500, but Cl is then still 13–14% from its converged value. Getting within 0.5%
+  takes about 1,450 iterations, unless faster solver settings (SIMPLEC, being
+  tested) reach the same answer sooner.
+- **The solver's residual limit is not a reliable stop signal.** One run stopped
+  while Cl was still drifting. The other never stopped, although Cl had been
+  steady for a long time. The Cl history is used to judge convergence instead.
+- **The incoming turbulence level matters.** The original value
+  (nuTilda = 0.14 m²/s) is 14,000 times the molecular viscosity (ν = 1e-5 m²/s).
+  The usual recommendation for this model is 3–5 ν (Spalart & Rumsey, 2007).
+  Switching changes the downforce by 9% and halves the drag. We are checking
+  which setting is closer to reality against high-fidelity LES data for a
+  NACA 4412 in free air (Vinuesa et al., 2018), using `groundGen.py --free-air`
+  and `validate_les.py`.
+
 ![Learning curve](results/learning_curve_expo5_6k.png)
 
 *Training and validation L1 loss per epoch. Both fall steadily and end close
@@ -215,6 +273,15 @@ python3 dataGen.py               # number of simulations set by `samples` in dat
 python3 /work/scripts/view_sample.py train/<file>.npz /work/results/sample.png
 ```
 
+Ground-effect samples, also inside the container (`python3 groundGen.py --help`
+lists all options):
+```bash
+cd /work/ground_effect
+python3 groundGen.py --airfoil naca23012.dat --alpha 4 --h 0.2 --U 30 --iterations 3000 --nutilda 3e-5
+python3 groundGen.py --free-air --airfoil naca4412 --alpha 5 --U 10 --iterations 3000   # no ground
+python3 /work/scripts/view_sample.py data/train/<file>.npz /work/results/<name>.png
+```
+
 ## Repository layout
 
 ```
@@ -224,6 +291,10 @@ scripts/view_sample.py      plots all six channels of a training sample
 scripts/plot_learning_curve.py  plots training/validation loss
 scripts/run_seeds.ps1       trains + tests with several seeds, unattended
 scripts/summarize_seeds.py  mean ± std table over the seed runs
+ground_effect/groundGen.py        data generation: inverted airfoil above a moving ground
+ground_effect/case_template/      OpenFOAM case and gmsh template for ground effect
+ground_effect/plot_convergence.py Cl and Cd histories of runs
+ground_effect/validate_les.py     free-air runs vs LES surface pressure and skin friction
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```
@@ -243,6 +314,12 @@ Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
   year    = {2020}
 }
 ```
+
+Other references used in the extension:
+- P. R. Spalart and C. L. Rumsey, "Effective inflow conditions for turbulence
+  models in aerodynamic calculations", *AIAA Journal* 45(10), 2007.
+- R. Vinuesa et al., "Turbulent boundary layers around wing sections up to
+  Re_c = 1,000,000", *International Journal of Heat and Fluid Flow* 72, 2018.
 
 Airfoil coordinates come from the UIUC Airfoil Coordinates Database
 (https://m-selig.ae.illinois.edu/ads/coord_database.html).

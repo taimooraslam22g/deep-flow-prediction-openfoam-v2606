@@ -1,0 +1,82 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  5                                     |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      fvSolution;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solvers
+{
+    p
+    {
+        solver          GAMG;
+        tolerance       1e-06;
+        relTol          0.1;
+        smoother        GaussSeidel;
+    }
+
+    U
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        nSweeps         2;
+        tolerance       1e-08;
+        relTol          0.1;
+    }
+
+    nuTilda
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        nSweeps         2;
+        tolerance       1e-08;
+        relTol          0.1;
+    }
+}
+
+// Ground-effect case: same solvers as the original. groundGen.py fills in
+// CONSISTENT and the RELAX_ values:
+//   default   : consistent no,  p 0.3, U 0.7, nuTilda 0.7  (original settings)
+//   --simplec : consistent yes, p 1,   U 0.9, nuTilda 0.9  (SIMPLEC, usually
+//               converges in fewer iterations to the same steady answer)
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 0;
+    consistent      @CONSISTENT@;
+    pRefCell        0;
+    pRefValue       0;
+
+    residualControl
+    {
+        p               1e-5;
+        U               1e-5;
+        nuTilda         1e-5;
+    }
+}
+
+relaxationFactors
+{
+    fields
+    {
+        p               @RELAX_P@;
+    }
+    equations
+    {
+        U               @RELAX_U@;
+        nuTilda         @RELAX_NUTILDA@;
+    }
+}
+
+
+// ************************************************************************* //

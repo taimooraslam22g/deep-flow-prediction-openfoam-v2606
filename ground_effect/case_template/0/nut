@@ -1,0 +1,60 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  Ground-effect case: turbulent viscosity [m^2/s].
+  groundGen.py replaces the NUTILDA placeholders (original dataset: 0.14).
+  The ground is a wall, so it gets a wall function like the airfoil.
+  Far field: 'calculated', so the turbulence model sets nut from nuTilda there
+  too. The original case fixed nut = 0.14 at the far field. With nuTilda = 0.14
+  the model gives the same value, so results are unchanged, and nut stays
+  consistent for any other nuTilda.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nut;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform @NUTILDA@;
+
+boundaryField
+{
+    inlet
+    {
+        type            calculated;
+        value           uniform @NUTILDA@;
+    }
+    exit
+    {
+        type            calculated;
+        value           uniform @NUTILDA@;
+    }
+    top
+    {
+        type            calculated;
+        value           uniform @NUTILDA@;
+    }
+    ground
+    {
+        type            nutUSpaldingWallFunction;
+        value           uniform 0;
+    }
+    aerofoil
+    {
+        type            nutUSpaldingWallFunction;
+        value           uniform 0;
+    }
+    front
+    {
+        type            empty;
+    }
+    back
+    {
+        type            empty;
+    }
+}
+
+// ************************************************************************* //

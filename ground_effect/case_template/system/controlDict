@@ -1,0 +1,57 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  Ground-effect case: run control.
+  Same as the original case, except:
+    - the number of iterations is a placeholder (ITERATIONS, default 500)
+    - force coefficients are recorded every iteration (system/forceCoeffs)
+    - surface pressure and wall shear stress are written at the end (system/surfaceData)
+  The solver can stop before ITERATIONS if the residuals drop below the limits
+  in system/fvSolution. groundGen.py reads whichever time was written last.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     simpleFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+endTime         @ITERATIONS@;
+
+deltaT          1;
+
+writeControl    timeStep;
+
+writeInterval   @ITERATIONS@;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  6;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   6;
+
+runTimeModifiable true;
+
+functions
+{
+    #includeFunc internalCloud
+    #include "forceCoeffs"
+    #include "surfaceData"
+}
+
+// ************************************************************************* //

@@ -1,0 +1,29 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  Lift and drag coefficients on the airfoil, written every iteration to
+  postProcessing/forceCoeffs1/0/. groundGen.py replaces MAG_U with the air speed.
+
+  Cl = Fy / (0.5 * U^2 * Aref). Negative Cl means downforce.
+  The chord is 1 and the 2D slice is 1 deep, so Aref = 1.
+\*---------------------------------------------------------------------------*/
+
+forceCoeffs1
+{
+    type            forceCoeffs;
+    libs            (forces);
+    writeControl    timeStep;
+    writeInterval   1;
+    log             false;
+
+    patches         (aerofoil);
+    rho             rhoInf;     // incompressible: forces per unit density...
+    rhoInf          1;          // ...times 1, so the coefficients are exact
+    CofR            (0.25 0 0); // quarter chord, for the pitching moment
+    liftDir         (0 1 0);
+    dragDir         (1 0 0);
+    pitchAxis       (0 0 1);
+    magUInf         @MAG_U@;
+    lRef            1;
+    Aref            1;
+}
+
+// ************************************************************************* //

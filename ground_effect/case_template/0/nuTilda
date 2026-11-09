@@ -1,0 +1,56 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  Ground-effect case: Spalart-Allmaras working variable [m^2/s].
+  groundGen.py replaces the NUTILDA placeholders (original dataset: 0.14).
+  It is zero on walls: the airfoil and the ground.
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      nuTilda;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform @NUTILDA@;
+
+boundaryField
+{
+    inlet
+    {
+        type            freestream;
+        freestreamValue uniform @NUTILDA@;
+    }
+    exit
+    {
+        type            freestream;
+        freestreamValue uniform @NUTILDA@;
+    }
+    top
+    {
+        type            freestream;
+        freestreamValue uniform @NUTILDA@;
+    }
+    ground
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+    aerofoil
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+    front
+    {
+        type            empty;
+    }
+    back
+    {
+        type            empty;
+    }
+}
+
+// ************************************************************************* //
