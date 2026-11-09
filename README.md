@@ -20,7 +20,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain), numerical verification done (downforce mesh-converged within 0.04%, sampled flow field within 0.2%; runs without a steady solution are detected and kept out of the data). Next: faster sampling, validation in ground effect against experiments, then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain), numerical verification done (downforce mesh-converged within 0.04%, sampled flow field within 0.2%; runs without a steady solution are detected and kept out of the data), a sample now takes about 3 minutes. Next: validation in ground effect against experiments, then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
@@ -72,7 +72,9 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   numerical uncertainty. A very cambered wing close to the ground (S1223 at
   h/c = 0.1) separates and has no steady solution, so the generator now
   detects such runs and keeps them out of the training data. Also found:
-  locating the sample points took 37–66% of every run.
+  locating the sample points took 37–66% of every run. Sampling the grid row
+  by row instead gives identical samples and cuts the start-up to 4 s, so a
+  sample now takes about 3 minutes.
 
 ---
 
@@ -597,7 +599,23 @@ Inside the container, `sampling_test.py` re-sampled two finished round-2 runs
 this way (one in ground effect, one in free air). The masks and the values at
 every point were identical to the original samples. Re-sampling took 22–23 s,
 including reading the mesh and the fields. The start-up of those runs had
-taken 317 s and 152 s.
+taken 317 s and 152 s. In a full run, the first iteration now ends after 4 s.
+
+**End-to-end check with the new defaults** (1000 iterations, one run at a
+time, `data/smoke`):
+- **NACA 23012 test case:** Cl −1.1321, Cd 0.0181, converged (Cl varies by
+  0.028% over the last 200 iterations).
+  - The sampled flow field differs from the 2000-iteration run by 0.009% in
+    pressure and 0.001% in velocity, so stopping at 1000 iterations makes no
+    measurable difference.
+  - The whole sample took 182 s, meshing included; with the point cloud the
+    start-up alone had taken 317 s.
+- **S1223 hard case:** marked as not converged (Cl varies by 5.5%, nuTilda is
+  clipped to the end, 19% of the surface has reversed flow) and saved in
+  `not_converged/`.
+- **Exactly reproducible:** for both cases, Cl in every one of the 1000
+  iterations is bit-for-bit the same as in round 3. That run was made with the
+  old sampling and 4 runs at a time.
 
 **Decisions after round 3:**
 - Defaults stay: cellLimited, the medium mesh, 20 chords, 1000 iterations.
