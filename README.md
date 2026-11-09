@@ -20,7 +20,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain), numerical verification done (downforce mesh-converged within 0.04%, sampled flow field within 0.2%; runs without a steady solution are detected and kept out of the data), a sample now takes about 3 minutes. Now: validation in ground effect against wind tunnel tests (Tyrrell 026 wing, Zerihan 2001). First run: downforce within 1.4% of Zerihan's own 2D RANS from h/c 0.671 down to 0.224, same height of maximum downforce. Second run (smoothed wing shape, three meshes) in progress. Then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain), numerical verification done (downforce mesh-converged within 0.04%, sampled flow field within 0.2%; runs without a steady solution are detected and kept out of the data), a sample now takes about 3 minutes. Validated in ground effect against wind tunnel tests (Tyrrell 026 wing, Zerihan 2001; 33 runs on three meshes): downforce within 1.5% of Zerihan's own 2D RANS from h/c 0.671 down to 0.224, largest downforce at the same height, numerical uncertainty 0.04–1.8% down to h/c 0.134. Like his, our values are 14–19% above the tunnel's estimate, and the sparse tappings explain only 1% of that. Next: the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
@@ -85,6 +85,19 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   gmsh's spline puts kinks between the 44 table points per surface. The second
   run uses a wing shape smoothed within the table's rounding, and adds a coarse
   mesh for an uncertainty estimate at every height.
+- **2026-11-09**: Validation in ground effect, second run (smoothed wing, three
+  meshes, 33 runs in 1 h 51 min). The numerical uncertainty (GCI) of the
+  downforce is 0.04–0.4% down to h/c 0.313, rising to 1.8% at 0.134 and about
+  3% below. Smoothing removed the pressure spikes, but changed downforce by at
+  most 0.6%, so the first run's findings stand. On a mesh about as large as
+  Zerihan's, our downforce is 1.6–2.2% below his at every height. This
+  suggests that the growing difference near the ground on finer meshes comes
+  from mesh resolution, not from the model. Table 14 of the thesis shows that
+  his "freestream" CFD had no ground, while the tests were 3.36 chords above
+  it. With our run at that height, ours is 14–15% above the experiment at
+  every height from 3.36 down to 0.224. The default mesh stays for the
+  dataset: its flow fields are within 0.1–2.4% of the fine mesh, far below the
+  U-Net's error.
 
 ---
 
@@ -638,7 +651,7 @@ time, `data/smoke`):
 of the parameter ranges, to find where steady RANS converges, and finally
 the dataset.
 
-### Validation in ground effect: the Tyrrell 026 wing (second run in progress)
+### Validation in ground effect: the Tyrrell 026 wing
 
 The LES comparison checked the setup in free air. With a ground, the
 reference is the wind tunnel study of Zerihan (2001; summarised in Zerihan &
@@ -667,9 +680,11 @@ effect.
   estimate for trends: the tappings are too sparse to catch the suction spike
   at the leading edge.
 - **His own 2D RANS results** (the CFL3D code; Spalart–Allmaras, the model we
-  use, and k-ω; y+ ≈ 1; moving ground; fully turbulent; 25,000–30,000 grid
-  points). With Spalart–Allmaras, the trend with height was right, and the
-  values were 12–17% above the tapping estimate.
+  use, and k-ω; y+ ≈ 1; moving ground; fully turbulent; structured grids of
+  25,000–30,600 cells in ground effect, 20,500 in free air). With
+  Spalart–Allmaras, the trend with height was right,
+  and the values were 12–17% above the tapping estimate. His "freestream" case
+  has no ground: its grid has no ground block (Table 14).
 - **Where the flow separates near the trailing edge**, from oil flow. At
   h/c = 0.224 a very small separated region appears at x/c ≈ 0.99. It moves
   forward to x/c 0.91 at h/c = 0.134, about 0.8 at 0.090 and about 0.7 at
@@ -680,55 +695,143 @@ effect.
   from the thesis and rotated back to zero incidence (`make_tyrrell026.py`).
   The table is printed at the reference incidence. Rotating it back needs
   3.454°, the thesis says 3.45°, and the thickness (12.6% at 24% chord,
-  trailing edge 0.0073c) matches the description. Since the first run, the
-  shape is smoothed within the rounding of the table (see below). The
-  coordinates are not part of this repository.
+  trailing edge 0.0073c) matches the description. The shape is smoothed
+  within the rounding of the table (see "Problem found" below). The first
+  run used the table points as they are. The coordinates are not part of this
+  repository.
 - **Conditions as in the experiment:** true incidence 3.45°, ride height
   set at 2.45° and the wing then rotated about the quarter chord
   (`--h-alpha 2.45`). Re = 462,000 (4.62 m/s with our 1 m chord).
-- **Runs:** free air, h/c 3.36, and h/c from 0.671 down to 0.067, each on
-  three meshes (coarse, default, fine), 2000 iterations each.
+- **Runs:** free air, h/c 3.36, and nine heights from h/c 0.671 down to
+  0.067. Each runs on three meshes, each with about twice the cells of the one
+  before: coarse, default and fine (`--refine` 0.7071, 1 and 1.4142). 2000
+  iterations each; 33 runs, 1 h 51 min at 4 at a time.
 - **Like-for-like integration:** `validation_zerihan.py` also integrates our
   pressures at the experiment's tapping positions, in the same way as the
   experiment. This tests how much of the 15% gap comes from the sparse
   tappings.
 
-**First run** (the 87 table points as they are; the default and the fine
-mesh; free air and nine heights; 20 runs, 70 minutes at 4 at a time; all
-converged). Fine mesh:
+**Results** (fine mesh; `validation_zerihan.py`, table 1). GCI: the numerical
+uncertainty of our downforce, from the three meshes (see the mesh study
+below).
 
-| h/c | Experiment | CFL3D S-A | Ours | Ours, at the tappings | vs experiment | vs CFL3D | Separation x/c, ours | Separation x/c, oil flow |
-|---|---|---|---|---|---|---|---|---|
-| freestream¹ | 0.766 | 0.885 | 0.842 | 0.828 | +8.1% | −4.9% | – | – |
-| 0.671 | 0.902 | 1.052 | 1.044 | 1.028 | +14.0% | −0.7% | – | – |
-| 0.448 | 1.009 | 1.174 | 1.165 | 1.148 | +13.8% | −0.7% | – | – |
-| 0.313 | 1.145 | 1.320 | 1.323 | 1.305 | +14.0% | +0.2% | – | – |
-| 0.224 | 1.286 | 1.475 | 1.495 | 1.475 | +14.7% | +1.4% | 0.94 | ≈ 0.99 |
-| 0.179 | 1.362 | 1.565 | 1.600 | 1.579 | +16.0% | +2.2% | 0.88 | – |
-| 0.134 | 1.385 | 1.604 | 1.667 | 1.646 | +18.8% | +3.9% | 0.79 | 0.91 |
-| 0.112 | – | – | 1.659 | 1.638 | – | – | 0.74 | – |
-| 0.090 | 1.371 | 1.539 | 1.629 | 1.608 | +17.3% | +5.8% | 0.69 | ≈ 0.8 |
-| 0.067 | – | – | 1.556 | 1.537 | – | – | 0.63 | ≈ 0.7 |
+| h/c | Experiment | CFL3D S-A | Ours | GCI | Ours, at the tappings | vs experiment | vs CFL3D | Separation x/c, ours | Separation x/c, oil flow |
+|---|---|---|---|---|---|---|---|---|---|
+| free air | – | 0.885¹ | 0.842 | 0.1% | 0.831 | – | −4.9% | – | – |
+| 3.36 | 0.766¹ | – | 0.892 | 0.0% | 0.879 | +14.8% | – | – | – |
+| 0.671 | 0.902 | 1.052 | 1.046 | 0.2% | 1.032 | +14.4% | −0.6% | – | – |
+| 0.448 | 1.009 | 1.174 | 1.168 | 0.3% | 1.153 | +14.3% | −0.5% | – | – |
+| 0.313 | 1.145 | 1.320 | 1.325 | 0.4% | 1.309 | +14.3% | +0.4% | – | – |
+| 0.224 | 1.286 | 1.475 | 1.498 | 0.9% | 1.480 | +15.1% | +1.5% | 0.94 | ≈ 0.99 |
+| 0.179 | 1.362 | 1.565 | 1.603 | 1.3% | 1.585 | +16.4% | +2.4% | 0.88 | – |
+| 0.134 | 1.385 | 1.604 | 1.666 | 1.8% | 1.648 | +19.0% | +3.9% | 0.79 | 0.91 |
+| 0.112 | – | – | 1.669 | 3.0%² | 1.651 | – | – | 0.74 | – |
+| 0.090 | 1.371 | 1.539 | 1.633 | 3.1%² | 1.615 | +17.8% | +6.1% | 0.69 | ≈ 0.8 |
+| 0.067 | – | – | 1.560 | –³ | 1.544 | – | – | 0.63 | ≈ 0.7 |
 
-¹ Ours: free air. The experiment: 3.36 chords above the ground (see the
-second run). "vs experiment" compares our pressures integrated at the
-tappings with the experiment, "vs CFL3D" our force coefficients with CFL3D.
+"vs experiment" compares our pressures integrated at the tappings with the
+experiment, "vs CFL3D" our force coefficients with CFL3D.
 
-What the first run shows:
-- **Close to Zerihan's 2D RANS.** Same turbulence model, but a different
-  code, mesh and solver: within 1.4% from h/c 0.671 down to 0.224. Both have
-  their largest downforce at h/c 0.134, like the experiment, and lose
-  downforce below it. Closer to the ground our values are higher, from +2.2%
-  at h/c 0.179 to +5.8% at 0.090. That is where the flow separates, and where
-  the results depend most on the mesh. His mesh had 25,000–30,000 points;
-  ours has about 46,000–60,000 cells (default) and twice that (fine).
-- **The 15% gap to the experiment is in both 2D RANS results.** Zerihan put
-  it down partly to the sparse tappings, which would miss the suction spike
-  at the leading edge. Integrating our pressures only at the tapping
-  positions lowers our downforce by 1.1–1.4%, so the tappings explain little
-  of it. More likely causes are the differences between 2D RANS and the
-  tunnel. The wing is finite (aspect ratio 4.9): its tip vortices reduce the
-  effective incidence, even at the centre. And transition is free.
+¹ The "freestream" row of Table 15 holds two different cases. The tests
+were made 3.36 chords above the ground; the CFD for it had no ground.
+
+² The coarse mesh did not pass the convergence test: its downforce still
+varies by 0.12% (h/c 0.112) and 0.18% (0.090). That is less than a tenth of
+the differences between the meshes, so the GCI uses the mean of its last 100
+iterations.
+
+³ No GCI: on the coarse mesh the downforce oscillates by 0.7% and nuTilda is
+still clipped; on the default mesh it still drifts (0.15%).
+
+![Downforce and separation of the Tyrrell 026 wing against ride height](results/validation_zerihan.png)
+
+*Left: sectional downforce. Grey dashes: Zerihan's 2D RANS (CFL3D); squares:
+the experiment; blue: ours on the three meshes, with the GCI as bars on the
+fine mesh; orange: ours integrated at the experiment's tapping positions;
+crosses: runs that did not converge. Right of the vertical line: the height of
+the "freestream" tests (h/c 3.36) and free air. Right: where the flow starts to
+separate on the suction surface.*
+
+**Mesh study** (`validation_zerihan.py`, table 2). Downforce on the three
+meshes; the observed order of convergence p; the extrapolated value and the GCI
+(Celik et al. 2008, with p at most 2 in the GCI); and how far the sampled flow
+field of the default mesh is from the fine mesh's, measured like the U-Net
+error.
+
+| h/c | Downforce: coarse | default | fine | p | Extrapolated | GCI, fine mesh | Field, default vs fine: p / v |
+|---|---|---|---|---|---|---|---|
+| free air | 0.835 | 0.843 | 0.842 | (up and down) | 0.841 | 0.09% | 0.14% / 0.03% |
+| 3.36 | 0.883 | 0.891 | 0.892 | 9.5 | 0.892 | 0.04% | 0.10% / 0.03% |
+| 0.671 | 1.033 | 1.045 | 1.046 | 6.5 | 1.048 | 0.18% | 0.17% / 0.09% |
+| 0.448 | 1.148 | 1.165 | 1.168 | 5.5 | 1.171 | 0.30% | 0.28% / 0.13% |
+| 0.313 | 1.296 | 1.321 | 1.325 | 5.3 | 1.329 | 0.40% | 0.36% / 0.16% |
+| 0.224 | 1.451 | 1.487 | 1.498 | 3.8 | 1.508 | 0.86% | 0.74% / 0.24% |
+| 0.179 | 1.536 | 1.586 | 1.603 | 3.2 | 1.620 | 1.35% | 1.09% / 0.30% |
+| 0.134 | 1.569 | 1.642 | 1.666 | 3.3 | 1.690 | 1.82% | 1.54% / 0.38% |
+| 0.112 | 1.556* | 1.630 | 1.669 | 2.0 | 1.709 | 3.00% | 2.37% / 0.40% |
+| 0.090 | 1.514* | 1.593 | 1.633 | 2.1 | 1.673 | 3.08% | 2.39% / 0.36% |
+| 0.067 | 1.444* | 1.529* | 1.560 | – | – | – | 1.86% / 0.32% |
+
+\* not converged (see the notes under the results table). Cells: coarse
+23,000–48,000, default 46,000–95,000, fine 90,000–190,000 (the most at h/c
+3.36).
+
+- **Downforce converges steadily with the mesh.** Down to h/c 0.134, p is 3 to
+  10, above the formal order of 2: the coarse mesh is not yet in the
+  asymptotic range, so the GCI uses p = 2, the cautious choice. Below, p is
+  about 2. In free air the three values go up and down, within 0.1%.
+- **The uncertainty grows towards the ground:** from 0.04–0.4% down to h/c
+  0.313, to 1.8% at 0.134 and about 3% at 0.112 and 0.090.
+
+**Against CFL3D on each of our meshes** (`validation_zerihan.py`, table 4).
+Zerihan's grids in ground effect had 25,000–30,600 cells (Table 14), about as
+many as our coarse mesh:
+
+| h/c | Ours, coarse | default | fine | extrapolated |
+|---|---|---|---|---|
+| 0.671 | −1.8% | −0.7% | −0.6% | −0.4% |
+| 0.448 | −2.2% | −0.7% | −0.5% | −0.3% |
+| 0.313 | −1.8% | +0.1% | +0.4% | +0.7% |
+| 0.224 | −1.6% | +0.8% | +1.5% | +2.2% |
+| 0.179 | −1.9% | +1.3% | +2.4% | +3.5% |
+| 0.134 | −2.2% | +2.4% | +3.9% | +5.4% |
+| 0.090 | −1.6%* | +3.5% | +6.1% | +8.7% |
+
+**What the results show:**
+- **The same curve as Zerihan's 2D RANS, down to h/c 0.224.** Same
+  turbulence model, but a different code, mesh and solver. Our downforce is
+  within 0.6% of his from h/c 0.671 down to 0.313, and within 1.5% at 0.224.
+  Our largest downforce is at h/c 0.112–0.134 (1.669 and 1.666, equal within
+  0.2%). CFL3D and the experiment also peak at 0.134, with 0.179 and 0.090 as
+  their nearest heights.
+- **Closer to the ground ours is higher, and that looks like mesh
+  resolution.** The difference grows from +2.4% at h/c 0.179 to +6.1% at
+  0.090. On our coarse mesh, which is about as large as his grids, our
+  downforce is 1.6–2.2% below his at every height: the two curves have the
+  same shape. Refining the mesh raises our downforce, most of all near the
+  ground, where the GCI is largest. This suggests that most of the growing
+  difference comes from mesh resolution, not from the model. A structured grid
+  like his can do more with the same number of cells. But his grids had even
+  fewer cells at the two lowest heights (Table 14), where ours need the most.
+- **Both 2D RANS results are well above the experiment.** Integrated at the
+  tappings, ours is 14.3–15.1% above the experiment from h/c 3.36 down to
+  0.224, and 16–19% closer to the ground; CFL3D is 12–17% above. Zerihan put
+  part of the gap down to the sparse tappings, which would miss the suction
+  spike at the leading edge. But integrating our pressures only at the
+  tapping positions lowers our downforce by just 1.0–1.2%: the tappings catch
+  most of it. So the experiment's pressures themselves are lower. More likely
+  causes are the differences between 2D RANS and the tunnel. The wing is
+  finite (aspect ratio 4.9), and its tip vortices reduce the effective
+  incidence even at the centre. And transition is free.
+- **"Freestream" was two different cases.** The tests were made 3.36 chords
+  above the moving ground. Zerihan's CFD for this case had no ground: Table 14
+  lists no ground block for its grid. At the tests' height, our h/c 3.36 run
+  is 14.8% above the experiment, in line with the other heights (the tunnel
+  roof makes this comparison less exact; see below). Our free air is 4.9%
+  below CFL3D's. Free air is the one case where our 20-chord domain
+  matters: in round 2 it lowered the NACA 4412's lift by 3.3% (lift ∝ 1/R).
+  A ground 3.36 chords away still adds 5.9% downforce, on all three meshes;
+  part of that is this domain effect.
 - **Separation: right onset, too far forward.** As in the oil flow, the flow
   starts to separate at the trailing edge around h/c 0.224, and the
   separation moves forward as the wing gets lower. But ours lies 0.05–0.12
@@ -737,14 +840,29 @@ What the first run shows:
   laminar up to the bubble at 0.3c, so it reaches the trailing edge thinner.
   Zerihan's tests with trips at 10% chord had more separation and less
   downforce near the ground (3D balance: maximum CL 1.39 instead of 1.72).
-- **Mesh:** from the default to the fine mesh, downforce changes by less than
-  0.7% down to h/c 0.224, and by up to 2.8% closer to the ground (h/c 0.090).
-  - The sampled pressure field changes by 0.1–0.8% down to h/c 0.224, and by
-    1.3–2.7% below. That is still several times below the U-Net's pressure
-    error (about 15%).
-  - First cell at y+ of at most 1.95 (default) and 1.43 (fine).
-- **Run time:** 2000 iterations took 7–10 minutes on the default mesh and
-  17–22 minutes on the fine mesh, with 4 runs at a time.
+  The mesh moves our separation point by 0.015–0.023 chords from the coarse
+  to the fine mesh, and by at most 0.007 from the default to the fine mesh.
+- **Converged:** all 11 runs on the fine mesh, 10 of 11 on the default and 8
+  of 11 on the coarse mesh. The failures are all at the lowest heights, where
+  13–20% of the wing surface has reversed flow. There the coarse mesh
+  oscillates (and at h/c 0.067 still clips nuTilda), and on the default mesh
+  the downforce still drifts at h/c 0.067. Zerihan had the same problem with
+  CFL3D: steady runs oscillated, and only time-accurate runs settled on a
+  steady result, after 3–4 days per case.
+- **y+ of the first cell** (5–95% chord): at most 1.6–2.3 on the coarse mesh,
+  1.2–1.7 on the default and 0.8–1.2 on the fine mesh (medians 0.9–1.2,
+  0.7–0.9 and 0.5–0.65).
+- **Run time:** 2000 iterations took 5–6 minutes on the coarse mesh, 9–11 on
+  the default and 19–25 on the fine mesh, with 4 runs at a time. h/c 3.36 has
+  1.6 times the cells and took 8, 18 and 44 minutes.
+
+![Surface pressure of the Tyrrell 026 wing](results/validation_zerihan_cp.png)
+
+*Left: our surface pressure on the fine mesh at six heights; the ticks at the
+bottom mark the experiment's tappings on the suction surface. As the wing gets
+closer to the ground, the suction peak grows and moves back, and the pressure
+recovery behind it gets steeper. Right: the first run (grey, the table points
+as they are) against the smoothed wing (red), at h/c 0.134.*
 
 **Problem found: kinks in the wing surface.** Our pressure distributions had
 spikes, the largest at x/c = 0.18, next to the suction peak. They are not
@@ -761,35 +879,50 @@ The fix: `make_tyrrell026.py` now fits a smoothing spline (quintic, in arc
 length) that stays within the rounding of the table's four decimals. The
 table points are 9 µm (rms) and at most 34 µm from it, on the 223.4 mm model.
 It is written with 200 points per surface.
-- **Effect:** the largest wiggle in the inviscid Cp drops from 0.043 to
+- **Effect on the inviscid Cp:** the largest wiggle drops from 0.043 to
   0.003 on the suction surface, and from 0.103 to 0.017 on the pressure
   surface.
+- **Effect in the RANS runs** (`validation_zerihan.py`, table 3): the spikes
+  are gone (right of the figure above). Downforce changed by 0.0–0.6% and the
+  separation point by at most 0.004 chords, so the first run's findings
+  stand. The sampled pressure field changed by 0.1–0.7%, as much as the
+  default mesh's own error at moderate heights. Kinks matter more for training
+  data than for forces. The first run is kept in
+  `ground_effect/data/validation_zerihan_raw` (not in this repository).
 - **What remains** is a real, smooth bump in the shape at x/c 0.02. Zerihan's
   CFD shows it as well (a small deceleration at x/c 0.03 on the pressure
   surface); the experiment does not.
 - **Earlier tests:** the airfoil files used there are much less affected
   (largest wiggle 0.010 for the NACA 23012 and 0.009 for the S1223).
 
-**Second run (in progress):** 33 runs, about 1.5 hours.
-- The smoothed wing.
-- A coarse mesh as well (`--refine 0.7071`), so that every height has three
-  meshes and a grid convergence index.
-- **h/c 3.36,** where the experiment's "freestream" tests were made. Our
-  free-air run was 4.9% below CFL3D's freestream value, while at h/c 0.671 we
-  agree within 0.7%. Extrapolating our results, a ground 3.36 chords away
-  still adds about 4% downforce. That would explain the difference if
-  Zerihan's freestream CFD also had a ground there. The thesis does not say.
-- The first run is kept in `data/validation_zerihan_raw`, and the report
-  compares the two.
-
 **Known differences we cannot remove:**
 - The experiment had free transition with a laminar bubble. Our turbulence
   model assumes turbulent flow from the leading edge.
 - The wing is three-dimensional: aspect ratio 4.9, with endplates. The flow
   at its centre is close to 2D, but the tip vortices change it somewhat.
-- The tunnel has a roof: about 7 chords above the wing near the ground, and
-  4 chords in the "freestream" tests. Zerihan's CFD put its top boundary at
-  7 chords. Ours is 20 chords away.
+- The tunnel has a roof. It is about 7 chords above the wing near the ground,
+  but only about 4 chords above it in the "freestream" tests, almost as close
+  as the ground (3.36 chords). There it partly cancels the ground's effect,
+  so that test lies somewhere between our free-air and our h/c 3.36 runs.
+  Neither CFD has the roof: Zerihan's top boundary at 7 chords is not a wall
+  (it extrapolates the flow), and ours is 20 chords away.
+
+**What this means for the dataset:**
+- **The default mesh stays.** Its sampled flow fields are within 0.1–0.4%
+  (pressure) of the fine mesh's down to h/c 0.313, 0.7–1.5% from 0.224 to
+  0.134 and 1.9–2.4% below; velocity within 0.4% everywhere. The U-Net's test
+  errors are about 15% (pressure) and 2.5% (velocity), 6 to 100 times larger.
+  The fine mesh would take 2.2 times as long.
+- **Separated flow close to the ground may not converge,** even at this
+  moderate incidence: the default mesh failed at h/c 0.067, with 19% of the
+  wing surface in reversed flow. The convergence test keeps such runs out of
+  the data; the parameter scan will show how much of the range they affect.
+- **Airfoil files:** before the dataset is made, all UIUC files get checked
+  for kinks with `shape_check.py`. Files with kinks can be smoothed like the
+  Tyrrell wing.
+
+**Next:** check the airfoil files, scan the parameter ranges (where steady
+RANS converges), then generate the dataset.
 
 ---
 

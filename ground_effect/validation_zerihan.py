@@ -12,9 +12,10 @@ free transition, U = 30 m/s, Re = 0.43-0.46 million, moving ground:
     (straight lines between them). Zerihan calls it an estimate for the trends, and
     expects it to be low because the tappings miss the suction spike near the leading edge.
     'CFL3D S-A' is his own 2D RANS result (Spalart-Allmaras, fully turbulent, y+ about 1,
-    moving ground, 25,000-30,000 grid points). Its 'freestream' row: the tests were made
-    3.36 chords above the moving ground (750 mm, the middle of the tunnel); the thesis does
-    not say where the ground was in the CFD.
+    moving ground, 25,000-30,600 cells; Table 14). The 'freestream' row of Table 15 is two
+    different cases: the tests were made 3.36 chords above the moving ground (750 mm, the
+    middle of the tunnel), but the CFD grid for it has no ground block (Table 14). So the
+    experiment's value is compared with our run at h/c 3.36, and CFL3D's with our free air.
   - the tapping positions on the two surfaces (Table 5), used to integrate our pressures
     the same way as the experiment ('at tappings').
   - where the boundary layer separates on the suction surface, from oil flow
@@ -22,9 +23,10 @@ free transition, U = 30 m/s, Re = 0.43-0.46 million, moving ground:
 Our runs: three meshes per height (coarse, medium = the default, fine). The grid
 convergence index (GCI, Celik et al. 2008) of the fine mesh is the numerical uncertainty of
 our downforce. If data/validation_zerihan_raw/ exists (the first run, with the 87 table
-points as they are), a third table shows what smoothing the coordinates changed.
+points as they are), a third table shows what smoothing the coordinates changed. The fourth
+compares each of our meshes with CFL3D.
 
-Prints three tables and writes to results/:
+Prints four tables and writes to results/:
     validation_zerihan.png     downforce and separation point against the ride height
     validation_zerihan_cp.png  our surface pressures; table points against smoothed shape
 """
@@ -50,9 +52,12 @@ OUT = os.path.join(ROOT, "results")
 CHORD_MM = 223.4
 FREESTREAM = 3.36  # h/c of the 'freestream' tests (thesis section 2.7)
 
-# Table 15: h/c, experiment, CFL3D S-A. The first row is the 'freestream' case.
-TABLE15 = [(FREESTREAM, 0.766, 0.885), (0.671, 0.902, 1.052), (0.448, 1.009, 1.174), (0.313, 1.145, 1.320),
-           (0.224, 1.286, 1.475), (0.179, 1.362, 1.565), (0.134, 1.385, 1.604), (0.090, 1.371, 1.539)]
+# Table 15: sectional downforce, experiment and CFL3D S-A, by h/c. Its 'freestream' row: the
+# experiment at h/c 3.36, CFL3D without a ground (None = free air).
+EXPERIMENT = {FREESTREAM: 0.766, 0.671: 0.902, 0.448: 1.009, 0.313: 1.145, 0.224: 1.286, 0.179: 1.362,
+              0.134: 1.385, 0.090: 1.371}
+CFL3D = {None: 0.885, 0.671: 1.052, 0.448: 1.174, 0.313: 1.320, 0.224: 1.475, 0.179: 1.565, 0.134: 1.604,
+         0.090: 1.539}
 # Table 5: chordwise tappings at the wing centre, mm from the leading edge
 TAPS_SUCTION = [0, 2, 4, 6, 8, 10, 15, 20, 25, 30, 40, 56, 65, 75, 85, 95, 110, 130, 150, 160, 170, 180,
                 190, 200, 211, 222]
@@ -148,16 +153,36 @@ def load_runs(folder):
             rows[(mesh, h)] = dict(force=-float(z["Cl"]), full=downforce_from_pressures(cp),
                                    taps=downforce_from_pressures(cp, taps), sep=separation(cfs),
                                    converged=bool(z["converged"]) if "converged" in z.files else True,
+                                   cl_range=float(z["cl_range"]) if "cl_range" in z.files else 0.0,
+                                   clipping=("last_bounded" in z.files
+                                             and int(z["last_bounded"]) > 0.9 * int(z["iterations"])),
                                    cells=int(z["cells"]), a=z["a"], cp=cp)
     return rows
 
 
 def mesh_study(rows, h):
-    """GCI of the downforce at height h, if all three meshes have converged; else None."""
+    """GCI of the downforce at height h from the three meshes, or None.
+    A run that failed the convergence test still counts if its Cl varies by less than a
+    tenth of the difference between the medium and the fine mesh, and nuTilda is no longer
+    clipped: the mean of its last 100 iterations is then accurate enough. 'approx' is the
+    largest such variation (None if all three runs converged)."""
     runs = [rows.get((m, h)) for m in ("fine", "medium", "coarse")]
-    if any(r is None or not r["converged"] for r in runs):
+    if any(r is None for r in runs):
         return None
-    return gci([r["cells"] for r in runs], [r["force"] for r in runs])
+    step = abs(runs[0]["force"] - runs[1]["force"]) / runs[0]["force"]
+    loose = [r for r in runs if not r["converged"]]
+    if any(r["clipping"] or r["cl_range"] > 0.1 * step for r in loose):
+        return None
+    st = gci([r["cells"] for r in runs], [r["force"] for r in runs])
+    st["approx"] = max((r["cl_range"] for r in loose), default=None)
+    return st
+
+
+def not_converged(rows, h):
+    """'coarse (Cl varies by 0.71%)'-style list of the runs at height h that did not converge."""
+    return ", ".join(f"{m} (Cl varies by {100 * rows[(m, h)]['cl_range']:.2f}%"
+                     f"{'; nuTilda still clipped' if rows[(m, h)]['clipping'] else ''})"
+                     for m in MESHES if (m, h) in rows and not rows[(m, h)]["converged"])
 
 
 def num(v, width, spec=".3f", suffix=""):
@@ -174,7 +199,6 @@ def main():
     if not any(m == "fine" for m, _ in rows):
         sys.exit(f"no runs found in {RUNS}: run validation_zerihan.sh in the container first")
     raw = load_runs(RAW) if os.path.isdir(RAW) else {}
-    ref = {h: (e, s) for h, e, s in TABLE15}
     oil = dict(OIL_FLOW)
     studies = {h: mesh_study(rows, h) for h in HEIGHTS}
 
@@ -182,26 +206,34 @@ def main():
     print("   Re 462,000. Ours: fine mesh, force coefficients, with the GCI of the fine mesh; 'at tappings': our")
     print("   pressures sampled at the experiment's tappings and integrated like the experiment. 'vs expt' compares")
     print("   'at tappings' with the experiment, 'vs CFL3D' our forces with CFL3D. Separation: x/c on the suction")
-    print("   surface. Experiment and CFL3D: Zerihan (2001), Table 15; its freestream row is shown at h/c 3.36.")
+    print("   surface. Experiment and CFL3D: Zerihan (2001), Table 15. Its freestream row is the experiment at")
+    print("   h/c 3.36, where the tests were made, and CFL3D in free air: its grid had no ground (Table 14).")
     print(f"{'h/c':>6s}{'experiment':>11s}{'CFL3D S-A':>10s}{'ours':>8s}{'GCI':>7s}{'at tappings':>12s}"
           f"{'vs expt':>9s}{'vs CFL3D':>9s}{'separation':>11s}{'oil flow':>9s}{'converged c/m/f':>17s}")
     for h in HEIGHTS:
         f = rows.get(("fine", h))
         if f is None:
             continue
-        e, s = ref.get(h, (np.nan, np.nan))
+        e, s = EXPERIMENT.get(h, np.nan), CFL3D.get(h, np.nan)
         st = studies[h]
         conv = "/".join("-" if (m, h) not in rows else "yes" if rows[(m, h)]["converged"] else "NO" for m in MESHES)
         print(f"{label(h):>6s}{num(e, 11)}{num(s, 10)}{num(f['force'], 8)}"
-              f"{num(100 * st['gci_fine'] if st else None, 7, '.1f', '%')}{num(f['taps'], 12)}"
+              f"{num(100 * st['gci_fine'] if st else None, 6, '.1f', '%')}{'*' if st and st['approx'] else ' '}"
+              f"{num(f['taps'], 12)}"
               f"{num(100 * (f['taps'] / e - 1), 9, '+.1f', '%')}{num(100 * (f['force'] / s - 1), 9, '+.1f', '%')}"
               f"{num(f['sep'], 11, '.2f')}{num(oil.get(h, np.nan), 9, '.2f')}{conv:>17s}")
+    approx = [st["approx"] for st in studies.values() if st and st["approx"]]
+    if approx:
+        print(f"   * a run did not pass the convergence test, but its Cl varies by at most {100 * max(approx):.2f}%, "
+              f"less than a tenth\n     of the difference between the meshes: GCI from the mean of its last 100 "
+              f"iterations (see table 2)")
     fine = {h: r for (m, h), r in rows.items() if m == "fine"}
     ground = {h: r for h, r in fine.items() if h is not None and h < 1}
-    if ground:
-        hmax = max(ground, key=lambda h: ground[h]["force"])
-        print(f"\nlargest downforce (fine mesh): {ground[hmax]['force']:.3f} at h/c {hmax:.3f}. Table 15: experiment 1.385 "
-              f"and CFL3D 1.604, both at h/c 0.134. 3D wing on the balance: CL 1.72 at h/c 0.082")
+    if len(ground) > 1:
+        h1, h2 = sorted(ground, key=lambda h: -ground[h]["force"])[:2]
+        print(f"\nlargest downforce (fine mesh): {ground[h1]['force']:.3f} at h/c {h1:.3f}, next {ground[h2]['force']:.3f} "
+              f"at h/c {h2:.3f} ({100 * (ground[h2]['force'] / ground[h1]['force'] - 1):+.1f}%).")
+        print("Table 15: experiment 1.385 and CFL3D 1.604, both at h/c 0.134. 3D wing on the balance: CL 1.72 at h/c 0.082")
     loss = [100 * (1 - r["taps"] / r["full"]) for r in fine.values()]
     full = [100 * (r["full"] / r["force"] - 1) for r in fine.values()]
     print(f"integrating at the tappings lowers our downforce by {min(loss):.1f} to {max(loss):.1f}%; the integral of all "
@@ -219,24 +251,39 @@ def main():
             continue
         st = studies[h]
         dp, dv = field_difference(r[1]["a"], r[2]["a"]) if r[1] is not None else (np.nan, np.nan)
-        osc = st is not None and st["oscillating"]
+        notes = (["oscillating"] if st is not None and st["oscillating"] else []) + \
+            ([f"not converged: {not_converged(rows, h)}" + ("" if st else ", no GCI")] if not_converged(rows, h) else [])
         print(f"{label(h):>6s}" + "".join(num(x["cells"] if x else None, w, "d") for x, w in zip(r, (14, 8, 8)))
               + "".join(num(x["force"] if x else None, w) for x, w in zip(r, (18, 8, 8)))
               + num(st["p"] if st else None, 6, ".1f") + num(st["ext"] if st else None, 9)
               + num(100 * st["gci_fine"] if st else None, 9, ".2f", "%")
               + num(100 * st["gci_medium"] if st else None, 11, ".2f", "%")
-              + num(dp, 9, ".2f", "%") + num(dv, 8, ".2f", "%") + ("  (oscillating)" if osc else ""))
+              + num(dp, 9, ".2f", "%") + num(dv, 8, ".2f", "%") + (f"  ({'; '.join(notes)})" if notes else ""))
 
     if raw:
-        print("\n3. Effect of smoothing the coordinates (fine mesh): the first run used the 87 table points as they are")
+        print("\n3. Effect of smoothing the coordinates (fine mesh): the first run used the 87 table points as they are.")
+        print("   Field: how much the sampled flow field of the first run differs from the smoothed wing's")
         print(f"{'h/c':>6s}{'downforce: table points':>24s}{'smoothed':>10s}{'change':>8s}"
-              f"{'separation: table points':>26s}{'smoothed':>10s}")
+              f"{'separation: table points':>26s}{'smoothed':>10s}{'field p':>9s}{'field v':>8s}")
         for h in HEIGHTS:
             a, b = raw.get(("fine", h)), rows.get(("fine", h))
             if a is None or b is None:
                 continue
+            dp, dv = field_difference(a["a"], b["a"])
             print(f"{label(h):>6s}{num(a['force'], 24)}{num(b['force'], 10)}{num(100 * (b['force'] / a['force'] - 1), 8, '+.1f', '%')}"
-                  f"{num(a['sep'], 26, '.2f')}{num(b['sep'], 10, '.2f')}")
+                  f"{num(a['sep'], 26, '.2f')}{num(b['sep'], 10, '.2f')}{num(dp, 9, '.2f', '%')}{num(dv, 8, '.2f', '%')}")
+
+    print("\n4. Ours against CFL3D S-A on each of our meshes, and our extrapolated value. CFL3D's grids had 20,544")
+    print("   cells in free air and 25,152-30,592 in ground effect (Table 14), about the size of our coarse mesh")
+    print(f"{'h/c':>6s}{'coarse':>9s}{'medium':>9s}{'fine':>9s}{'extrap.':>9s}")
+    for h in HEIGHTS:
+        s = CFL3D.get(h)
+        if s is None:
+            continue
+        st = studies[h]
+        print(f"{label(h):>6s}" + "".join(num(100 * (rows[(m, h)]["force"] / s - 1) if (m, h) in rows else None, 9, "+.1f", "%")
+                                          for m in MESHES)
+              + num(100 * (st["ext"] / s - 1) if st else None, 9, "+.1f", "%"))
 
     figures(rows, raw, studies)
 
@@ -247,17 +294,18 @@ def figures(rows, raw, studies):
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={"width_ratios": [1.5, 1]})
     ax = axes[0]
-    near = [(h, e, s) for h, e, s in TABLE15 if h < 1]
-    ax.plot([h for h, _, _ in near], [s for _, _, s in near], "--", color="gray", lw=1.2,
-            label="CFL3D, Spalart-Allmaras (Zerihan)")
-    ax.plot(xpos(FREESTREAM), TABLE15[0][2], "o", color="gray", ms=5, mfc="none")
-    ax.plot([xpos(h) for h, _, _ in TABLE15], [e for _, e, _ in TABLE15], "ks", mfc="none", ms=7,
+    near = sorted((h, s) for h, s in CFL3D.items() if h is not None)
+    ax.plot(*zip(*near), "--", color="gray", lw=1.2, label="CFL3D, Spalart-Allmaras (Zerihan)")
+    ax.plot(xpos(None), CFL3D[None], "o", color="gray", ms=5, mfc="none")
+    ax.plot([xpos(h) for h in EXPERIMENT], list(EXPERIMENT.values()), "ks", mfc="none", ms=7,
             label="experiment, integrated tappings at the wing centre")
-    for mesh, style in [("fine", "-"), ("medium", ":")]:
+    bad = []
+    for mesh, style in [("fine", "-"), ("medium", ":"), ("coarse", "-.")]:
         pts = sorted((h, r) for (m, h), r in rows.items() if m == mesh and h is not None and h < 1)
         far = [(h, r) for (m, h), r in rows.items() if m == mesh and (h is None or h > 1)]
         if not pts:
             continue
+        bad += [(xpos(h), r["force"]) for h, r in pts + far if not r["converged"]]
         if mesh == "fine":
             err = [0.0 if studies.get(h) is None else studies[h]["gci_fine"] * r["force"] for h, r in pts]
             ax.errorbar([h for h, _ in pts], [r["force"] for _, r in pts], yerr=err, fmt="-o", color="C0", ms=4,
@@ -266,19 +314,21 @@ def figures(rows, raw, studies):
             ax.plot([h for h, _ in pts], [r["taps"] for _, r in pts], "-^", color="C1", ms=5,
                     label="ours, fine mesh, integrated at the tappings")
             ax.plot([xpos(h) for h, _ in far], [r["taps"] for _, r in far], "^", color="C1", ms=5)
-            bad = [(xpos(h), r["force"]) for h, r in pts + far if not r["converged"]]
-            if bad:
-                ax.plot(*zip(*bad), "x", color="C3", ms=10, mew=2, label="not converged")
         else:
-            ax.plot([h for h, _ in pts], [r["force"] for _, r in pts], style, color="C0", lw=1.2,
+            ax.plot([h for h, _ in pts], [r["force"] for _, r in pts], style, color="C0", lw=1.0,
                     label=f"ours, {mesh} mesh")
+    if bad:
+        ax.plot(*zip(*bad), "x", color="C3", ms=7, mew=1.5, label="not converged (Cl still varies)")
     ax.axvline(0.75, color="k", lw=0.6)
     ax.set_xticks([0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.80, 0.92],
                   ["0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "3.36", "free\nair"])
     ax.set(xlabel="ride height h/c", ylabel="sectional downforce coefficient", xlim=(0, 0.98),
            title="Tyrrell 026 wing, quoted incidence 1 deg, Re 462,000")
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=8, loc="upper right")
+    order = ["CFL3D", "experiment", "ours, fine mesh (", "ours, fine mesh,", "ours, medium", "ours, coarse", "not converged"]
+    entries = sorted(zip(*ax.get_legend_handles_labels()),
+                     key=lambda e: next((i for i, o in enumerate(order) if e[1].startswith(o)), len(order)))
+    ax.legend(*zip(*entries), fontsize=8, loc="upper right")
 
     ax = axes[1]
     ax.plot(*zip(*OIL_FLOW), "ks", mfc="none", ms=7, label="experiment, oil flow")

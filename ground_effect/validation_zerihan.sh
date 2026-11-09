@@ -22,7 +22,7 @@
 #
 # The 33 runs are independent, so they run JOBS at a time (default 4), each in its own
 # work/workerN folder (60-92). Each run writes its output to $LOGS/<name>.log.
-# About 1.5 hours with 4 at a time.
+# About 2 hours with 4 at a time (1 h 51 min on a Ryzen 7 7730U laptop).
 #
 # To repeat the first run, with the 87 table points as they are:
 #     AIRFOIL=../data/airfoils/tyrrell026_raw.dat OUT=data/validation_zerihan_raw bash validation_zerihan.sh
