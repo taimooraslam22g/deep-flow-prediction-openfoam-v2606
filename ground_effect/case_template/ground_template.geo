@@ -1,21 +1,26 @@
 // Inverted airfoil above a moving ground: gmsh template.
 // groundGen.py fills in the placeholders (names between @ signs) and writes airfoil.geo.
 //
-// Same as the original airfoil_template.geo, except:
+// Changes from the original airfoil_template.geo:
 //   - the bottom edge of the domain is the ground, at a variable height
 //   - a refinement box gives finer cells in the gap between airfoil and ground
-// The curves are kept in the same order as the original, so the surface
-// numbers in the Physical Surface lines stay the same.
+//   - the domain size is a parameter (original: 5 chords from the airfoil)
+//   - optional boundary layer (--bl): thin quadrilateral cells along the airfoil.
+//     The airfoil is then one spline plus a short straight trailing-edge segment,
+//     so that the trailing-edge corners are real corners where gmsh can fan out
+//     the layers.
+// Without --bl the airfoil curve and the surface numbering are exactly as in the
+// original.
 
 @POINTS@
 
-Spline(1000) = {1000:@LAST_POINT@,1000};
+@AIRFOIL_CURVES@
 
-edge_lc = 0.2;
-Point(1900) = { 5, 5, 0, edge_lc};
-Point(1901) = { 5, @GROUND_Y@, 0, edge_lc};
-Point(1902) = { -5, @GROUND_Y@, 0, edge_lc};
-Point(1903) = { -5, 5, 0, edge_lc};
+edge_lc = @EDGE_LC@;
+Point(1900) = { @X_OUT@, @Y_TOP@, 0, edge_lc};
+Point(1901) = { @X_OUT@, @GROUND_Y@, 0, edge_lc};
+Point(1902) = { @X_IN@, @GROUND_Y@, 0, edge_lc};
+Point(1903) = { @X_IN@, @Y_TOP@, 0, edge_lc};
 
 Line(1) = {1900,1901};
 Line(2) = {1901,1902};
@@ -23,22 +28,10 @@ Line(3) = {1902,1903};
 Line(4) = {1903,1900};
 
 Line Loop (1) = {1,2,3,4};
-Line Loop (2) = {1000};
+Line Loop (2) = {@AIRFOIL_LOOP@};
 Plane Surface(1) = {1,2};
 
-Extrude {0, 0, 1} {
-  Surface{1};
-  Layers{1};
-  Recombine;
-}
-Physical Surface("back") = {1027};
-Physical Surface("front") = {1};
-Physical Surface("top") = {1022};
-Physical Surface("exit") = {1010};
-Physical Surface("ground") = {1014};
-Physical Surface("inlet") = {1018};
-Physical Surface("aerofoil") = {1026};
-Physical Volume("internal") = {1};
+@EXTRUDE_AND_PHYSICAL@
 
 // Finer cells between the airfoil and the ground (about 10 across the gap),
 // growing smoothly back to the normal size over a 0.3-chord transition.
@@ -53,3 +46,5 @@ Field[1].ZMin = -1;
 Field[1].ZMax = 2;
 Field[1].Thickness = 0.3;
 Background Field = 1;
+
+@BL_FIELD@

@@ -20,7 +20,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress: setup works, convergence study done. Next: validate against LES, then generate the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress: setup works. Turbulence level and solver chosen by validation against LES. Next: mesh study, then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
@@ -48,6 +48,11 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   original setting) leave Cl about 14% short of its converged value. The
   incoming turbulence level changes downforce by 9% and halves drag (see
   [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress)).
+- **2026-11-09**: Validated the setup against LES of a NACA 4412 at Re = 1M.
+  The realistic turbulence level (3ν) predicts surface pressure clearly better
+  than the original 0.14. Skin friction and drag are off with both, because of
+  the mesh. SIMPLEC gives the same answer as SIMPLE in 3.5× fewer iterations.
+  Both choices are now the defaults. Next: a mesh study.
 
 ---
 
@@ -217,7 +222,68 @@ The same case run with two levels of incoming turbulence, up to 3000 iterations:
   Switching changes the downforce by 9% and halves the drag. We are checking
   which setting is closer to reality against high-fidelity LES data for a
   NACA 4412 in free air (Vinuesa et al., 2018), using `groundGen.py --free-air`
-  and `validate_les.py`.
+  and `validate_les.py` (see below).
+
+### Validation against LES: NACA 4412 in free air, Re = 1M
+
+Before generating data, the CFD setup is checked against well-resolved LES of
+a NACA 4412 at 5° and Re_c = 1,000,000 (Vinuesa et al., 2018). The comparison
+uses the surface pressure Cp and skin friction Cf along the wing, between 15%
+and 98% of the chord, where the LES data is. The RANS runs use the same mesh and
+solver as the ground-effect runs, but with no ground (`groundGen.py --free-air`).
+Our 10 m/s, 1 m chord and ν = 1e-5 m²/s give exactly Re = 1M.
+
+| Incoming nuTilda | Cl | Cd | Mean \|ΔCp\| suction side | Mean \|ΔCp\| pressure side | Mean \|ΔCf\| suction side | Mean \|ΔCf\| pressure side |
+|---|---|---|---|---|---|---|
+| 0.14 m²/s (original) | 0.818 | 0.0488 | 0.053 | 0.025 | 0.00073 | 0.00144 |
+| 3e-5 m²/s (3ν) | 0.876 | 0.0275 | **0.033** | **0.021** | 0.00089 | 0.00175 |
+
+![Validation against LES](results/validation_naca4412_re1M.png)
+
+- **The realistic turbulence level (3ν) predicts the pressure clearly better.**
+  The suction-side error drops by 38% and the suction peak moves closer to the
+  LES. The pressure at the nose (the stagnation point) is Cp ≈ 1.0, as it must
+  be. With 0.14 it is 1.25, which only happens in an unrealistically viscous
+  flow.
+- **Neither setting predicts skin friction or drag well.** Cf is 30–50% off and
+  Cd is 2–4 times too high for this airfoil. The turbulence level is not the
+  cause; the mesh is. Only triangles about 0.005 chords in size touch the wall
+  (picture below), so the thin boundary layer (0.005–0.04 chords) gets 1–6
+  cells across it. The domain also reaches only 5 chords from the wing.
+- Note on the LES data: the stored pressure has an arbitrary offset. It is
+  removed using the total pressure outside the boundary layer, which is
+  constant along the wing (P∞ = −0.058 for Re ≥ 200k).
+
+![Original mesh](results/mesh_original_naca23012.png)
+
+*The original mesh near the wing: triangles only, about 0.005 chords at the
+surface.*
+
+### Faster convergence: SIMPLEC
+
+The same ground-effect case, solved with the original SIMPLE settings and with
+SIMPLEC (`consistent yes`, relaxation 0.9):
+
+| Solver | Final Cl | Final Cd | Cl within 0.5% of final from |
+|---|---|---|---|
+| SIMPLE (original settings) | −1.3057 | 0.0126 | iteration 1429 |
+| SIMPLEC | −1.3035 | 0.0126 | **iteration 406** |
+
+Both give the same answer (0.17% apart), but SIMPLEC needs 3.5 times fewer
+iterations: about 1 minute per sample instead of 4.
+
+![SIMPLE vs SIMPLEC](results/simplec_test.png)
+
+### Decisions so far, and next step
+
+- **Incoming nuTilda = 3ν = 3e-5 m²/s, SIMPLEC and 1000 iterations** are now
+  the defaults of `groundGen.py`. The original setup is still available with
+  `--nutilda 0.14 --solver simple --iterations 500`.
+- **Next: a mesh study.** It compares the original mesh with a boundary-layer
+  mesh (`--bl`: 23 thin quadrilateral layers along the wing, the first one
+  0.0002 chords thick), in a 5-chord and a 20-chord domain (`--domain 20`). Each
+  combination is checked against the LES again (`mesh_study.sh`, then
+  `mesh_study_report.py`).
 
 ![Learning curve](results/learning_curve_expo5_6k.png)
 
@@ -277,9 +343,11 @@ Ground-effect samples, also inside the container (`python3 groundGen.py --help`
 lists all options):
 ```bash
 cd /work/ground_effect
-python3 groundGen.py --airfoil naca23012.dat --alpha 4 --h 0.2 --U 30 --iterations 3000 --nutilda 3e-5
-python3 groundGen.py --free-air --airfoil naca4412 --alpha 5 --U 10 --iterations 3000   # no ground
+python3 groundGen.py --airfoil naca23012.dat --alpha 4 --h 0.2 --U 30   # one case
+python3 groundGen.py --free-air --airfoil naca4412 --alpha 5 --U 10      # no ground
+python3 groundGen.py --mesh-only --bl --airfoil naca4412 --alpha 5 --h 0.2   # check a mesh
 python3 /work/scripts/view_sample.py data/train/<file>.npz /work/results/<name>.png
+bash mesh_study.sh                                                        # the mesh study
 ```
 
 ## Repository layout
@@ -294,7 +362,10 @@ scripts/summarize_seeds.py  mean ± std table over the seed runs
 ground_effect/groundGen.py        data generation: inverted airfoil above a moving ground
 ground_effect/case_template/      OpenFOAM case and gmsh template for ground effect
 ground_effect/plot_convergence.py Cl and Cd histories of runs
+ground_effect/plot_mesh.py        draws the mesh around the wing
 ground_effect/validate_les.py     free-air runs vs LES surface pressure and skin friction
+ground_effect/mesh_study.sh       runs the mesh study (inside the container)
+ground_effect/mesh_study_report.py  figures and tables of the mesh study
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```

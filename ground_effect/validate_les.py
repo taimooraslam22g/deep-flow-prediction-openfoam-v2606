@@ -8,6 +8,7 @@ surface pressure coefficient Cp and Cf with runs of `groundGen.py --free-air`.
 
 Usage (on Windows, with the project's Python; needs scipy):
     python ground_effect/validate_les.py <naca4412.mat> <Re> <out.png> run1.npz [run2.npz ...]
+Each run can be given as "label=path.npz" to set its name in the plot and table.
 
 <Re> picks the LES case: 100k, 200k, 400k or 1M. In our setup the chord is 1 m and
 nu = 1e-5 m^2/s, so U = 10 m/s is Re = 1M.
@@ -41,8 +42,9 @@ def les_side(mat, key):
     return x, cp, cf
 
 
-def rans(path):
+def rans(spec):
     """Cp and Cf on both sides of the wing from a groundGen.py --free-air sample."""
+    label, path = spec.split("=", 1) if "=" in spec else (None, spec)
     z = np.load(path)
     if "surf_p" not in z.files or "surf_tau" not in z.files:
         sys.exit(f"{path} has no surface data")
@@ -75,8 +77,10 @@ def rans(path):
     ref = ~top_t & (xt > 0.3) & (xt < 0.6)
     if np.median(cf[ref]) < 0:
         cf = -cf
-    solver = str(z["solver"]) if "solver" in z.files else "simple"
-    label = f"RANS, nuTilda {float(z['nutilda']):g}" + (", SIMPLEC" if solver == "simplec" else "")
+    if label is None:
+        label = f"RANS, nuTilda {float(z['nutilda']):g}"
+        if "bl" in z.files:
+            label += f", {'BL' if bool(z['bl']) else 'original'} mesh, {float(z['domain']):g}c"
     return dict(label=label, Cl=abs(float(z["Cl"])), Cd=float(z["Cd"]),
                 xp=xp, cp=z["surf_p"] / q, top_p=is_top(xp, yp), xt=xt, cf=cf, top_t=top_t)
 
@@ -103,7 +107,8 @@ def main():
         ax = axes[1] if side == "suction side" else axes[2]
         ax.plot(xl, cfl, mk, mfc="none", color="k", ms=4, label="LES")
     print(f"Mean absolute difference from the LES at Re = {re_key}, 15-98% chord:")
-    print(f"{'run':34s}{'|Cl|':>8s}{'Cd':>8s}{'Cp suct':>9s}{'Cp pres':>9s}{'Cf suct':>9s}{'Cf pres':>9s}")
+    width = max(34, max(len(r["label"]) for r in results) + 2)
+    print(f"{'run':{width}s}{'|Cl|':>8s}{'Cd':>8s}{'Cp suct':>9s}{'Cp pres':>9s}{'Cf suct':>9s}{'Cf pres':>9s}")
     for k, r in enumerate(results):
         color = f"C{k}"
         errs = []
@@ -118,7 +123,7 @@ def main():
                                                color=color, label=r["label"])
             errs.append(np.mean(np.abs(at(xl, r["xp"][sel_p], r["cp"][sel_p]) - cpl)))
             errs.append(np.mean(np.abs(at(xl, r["xt"][sel_t], r["cf"][sel_t]) - cfl)))
-        print(f"{r['label']:34s}{r['Cl']:8.3f}{r['Cd']:8.4f}{errs[0]:9.3f}{errs[2]:9.3f}{errs[1]:9.5f}{errs[3]:9.5f}")
+        print(f"{r['label']:{width}s}{r['Cl']:8.3f}{r['Cd']:8.4f}{errs[0]:9.3f}{errs[2]:9.3f}{errs[1]:9.5f}{errs[3]:9.5f}")
 
     axes[0].set(xlabel="x/c", ylabel="Cp", title=f"Surface pressure, NACA 4412, Re = {re_key}")
     axes[0].invert_yaxis()
