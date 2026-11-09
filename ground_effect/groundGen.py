@@ -10,19 +10,26 @@ What is different from the original:
     airfoil. It moves at the same speed as the air, like the road seen from a moving car.
   * every run starts from a fresh copy of case_template/, so a failed run can never
     leave old results behind that get saved by mistake
-  * the lift (downforce) and drag coefficients, the residuals, a convergence check and
-    the surface pressure / wall shear stress are saved too
+  * the lift (downforce) and drag coefficients (averaged over the last 100 iterations),
+    the residuals and the surface pressure / wall shear stress are saved too
+  * every run is checked for convergence. Runs that do not settle to a steady flow (Cl
+    still changing, or nuTilda still clipped at the end) are saved in not_converged/,
+    so they cannot end up in the training data by mistake
   * --free-air removes the ground (for validation against free-flight reference data)
   * a boundary-layer mesh (thin cells along the airfoil, first cell at y+ of about 1,
     steady cell growth away from it) in a 20-chord domain; --refine makes every cell
     smaller or larger (grid convergence study)
+  * the flow is sampled along the 128 rows of the output grid instead of as one cloud
+    of points. That gives the same points, without the slow search for every point
+    before the first iteration
   * NACA 4-digit airfoils (e.g. naca4412) are generated from their formula if they are
     not in the airfoil folder
 
 Defaults are the settings chosen by the validation and the mesh study (see README):
-incoming nuTilda = 3e-5 (3 x nu) with a limited convection scheme, SIMPLEC, 1000
-iterations, boundary-layer mesh, 20-chord domain. The original dataset used
---nutilda 0.14 --nutilda-scheme linearUpwind --solver simple --iterations 500 --no-bl --domain 5.
+incoming nuTilda = 3e-5 (3 x nu) with a limited gradient for its convection, SIMPLEC,
+1000 iterations, boundary-layer mesh, 20-chord domain. The original dataset used
+--nutilda 0.14 --nutilda-scheme linearUpwind --solver simple --iterations 500 --no-bl
+--domain 5 --sampling cloud.
 
 Each sample is saved in the same 6 x 128 x 128 layout as the original dataset, so the same
 U-Net code can train on it. The ground appears in the mask channel (2), like the airfoil.
@@ -39,7 +46,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
+import warnings
 
 import numpy as np
 
@@ -53,6 +62,16 @@ U_RANGE = (10.0, 50.0)      # air speed, m/s
 
 RES = 128  # output grid: RES x RES points over x in [-0.5, 1.5], y in [-1, 1]
 
+# Convergence checks (mesh study, round 3). The drag flips between two values from one
+# iteration to the next (by up to 2% on coarse meshes), so Cl and Cd are averaged over
+# the last AVERAGE iterations. A run counts as converged if Cl varies by less than
+# STEADY_TOL over the last STEADY_WINDOW iterations (steady runs: below 0.03% after
+# 1000 iterations; runs with an unsteady, separated flow: 0.6-12%) and nuTilda is no
+# longer clipped at the end.
+AVERAGE = 100
+STEADY_WINDOW = 200
+STEADY_TOL = 0.001
+
 # Solver settings: (consistent, relaxation p, U, nuTilda)
 SOLVER = {"simple": ("no", 0.3, 0.7, 0.7),     # the original case
           "simplec": ("yes", 1.0, 0.9, 0.9)}   # SIMPLEC: same answer, about 3.5x fewer iterations
@@ -61,8 +80,8 @@ SOLVER = {"simple": ("no", 0.3, 0.7, 0.7),     # the original case
 # With a realistic (low) incoming nuTilda, the original scheme (linearUpwind with an
 # unlimited gradient) undershoots below zero at the edge of the boundary layer, and
 # OpenFOAM clips nuTilda in almost every iteration ("bounding nuTilda" in the log). The
-# nuTilda residual then stalls near 1e-3, and the skin friction gets small steps
-# (mesh study, round 2). Limiting the gradient or the interpolation prevents the undershoot.
+# nuTilda residual then stalls near 1e-3 (mesh study, round 2). Limiting the gradient
+# (cellLimited) stops the clipping; the TVD scheme limitedLinear does not (round 3).
 NUTILDA_SCHEMES = {
     "linearUpwind": ("", "bounded Gauss linearUpwind grad(nuTilda)"),  # the original case
     "cellLimited": ("grad(nuTilda)   cellLimited Gauss linear 1;",
@@ -367,12 +386,10 @@ def is_number(s):
         return False
 
 
-def latest(pattern):
-    """The file matching pattern in the latest time folder (folder names are times)."""
-    paths = glob.glob(pattern)
-    if not paths:
-        return None
-    return max(paths, key=lambda p: float(os.path.basename(os.path.dirname(p))))
+def latest_time_dir(folder):
+    """The latest time folder inside folder (folder names are times), or None."""
+    times = [d for d in glob.glob(os.path.join(folder, "*")) if is_number(os.path.basename(d))]
+    return max(times, key=lambda d: float(os.path.basename(d))) if times else None
 
 
 def cell_count(case):
@@ -384,18 +401,98 @@ def cell_count(case):
         return -1
 
 
-def to_grid(cloud_file, U):
-    """Turn the sampled points into the 6 x RES x RES training array.
+# Sampling of the RES x RES output grid. The original setup samples it as one 'cloud' of
+# RES^2 points (case_template/system/internalCloud). Before the first iteration, OpenFOAM
+# then searches the mesh for every point. On our boundary-layer meshes this took 2.5 to
+# 20 minutes per run (mesh study, round 3), often longer than the solver itself. Sampling
+# the same points as RES straight lines, one per grid row ('uniform' sets), needs only a
+# search for where each line starts; OpenFOAM then walks along it from cell to cell.
+# Same points, same interpolation (cellPoint).
+LINE_SETS = """/*--------------------------------*- C++ -*----------------------------------*\\
+Description
+    Samples p and U on the {res} x {res} training grid (x from -0.5 to {x1:g},
+    y from -1 to {y1:g}, z = 0.5), as one straight line per grid row. OpenFOAM then
+    locates only the start of each line and walks along it, instead of searching for
+    every point separately. Written by groundGen.py (--sampling lines).
+\\*---------------------------------------------------------------------------*/
+
+type            sets;
+libs            ("libsampling.so");
+
+fields          (p U);
+interpolationScheme cellPoint;
+setFormat       raw;
+
+executeControl  writeTime;
+writeControl    writeTime;
+
+sets
+(
+{rows}
+);
+
+// ************************************************************************* //
+"""
+
+
+def grid_x(i, res=RES):
+    return (i / res - 0.5) * 2 + 0.5
+
+
+def grid_y(j, res=RES):
+    return (j / res - 0.5) * 2
+
+
+def line_sets(res=RES):
+    """The internalCloud function for --sampling lines: grid row j is the line
+    y = grid_y(j) from grid_x(0) to grid_x(res - 1) with res points, so the points are
+    exactly those of the original cloud."""
+    rows = [f"    row{j:03d} {{ type uniform; axis xyz; start ({grid_x(0):.10g} {grid_y(j):.10g} 0.5); "
+            f"end ({grid_x(res - 1):.10g} {grid_y(j):.10g} 0.5); nPoints {res}; }}" for j in range(res)]
+    return LINE_SETS.format(res=res, x1=grid_x(res - 1), y1=grid_y(res - 1), rows="\n".join(rows))
+
+
+def read_rows(folder, res=RES):
+    """The sampled grid points of the line sets in one time folder, in grid order (row by
+    row, x increasing), as rows of x y z p Ux Uy Uz. Also returns the number of extra
+    points that are not grid points (where a line crosses the airfoil or the ground),
+    which are dropped. A row completely below the ground has no points (and maybe no file)."""
+    parts, extra = [], 0
+    for j in range(res):
+        files = glob.glob(os.path.join(folder, f"row{j:03d}_*.xy"))
+        if not files:
+            continue
+        if len(files) > 1:
+            raise RuntimeError(f"more than one file for row {j}: {files}")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # an empty file (row below the ground) is fine
+            data = np.loadtxt(files[0], ndmin=2)
+        if not data.size:
+            continue
+        # OpenFOAM writes 6 significant digits (1.453125 -> 1.45312), so allow 2e-5
+        k = np.round((data[:, 0] + 0.5) * res / 2).astype(int)  # grid index along the row
+        dist = np.abs(data[:, 0] - grid_x(k, res)) + np.abs(data[:, 1] - grid_y(j, res))
+        keep = {}
+        for n in np.where((dist < 2e-5) & (k >= 0) & (k < res))[0]:
+            if k[n] not in keep or dist[n] < dist[keep[k[n]]]:  # the closest point per grid index
+                keep[k[n]] = n
+        extra += len(data) - len(keep)
+        parts.append(data[[keep[i] for i in sorted(keep)]])
+    return (np.vstack(parts) if parts else np.zeros((0, 7))), extra
+
+
+def to_grid(samples, U):
+    """Turn the sampled points into the 6 x RES x RES training array. samples is an array,
+    or a file, with the columns x y z p Ux Uy Uz, in grid order (row by row, x increasing).
 
     Points inside the airfoil or below the ground are not in the mesh, so OpenFOAM
     skips them. Those become mask = 1, exactly like the airfoil in the original."""
-    ar = np.loadtxt(cloud_file)  # columns: x y z p Ux Uy Uz
+    ar = np.loadtxt(samples) if isinstance(samples, str) else np.asarray(samples)
     out = np.zeros((6, RES, RES))
     i = 0
     for y in range(RES):
         for x in range(RES):
-            xf = (x / RES - 0.5) * 2 + 0.5
-            yf = (y / RES - 0.5) * 2
+            xf, yf = grid_x(x), grid_y(y)
             if i < len(ar) and abs(ar[i][0] - xf) < 1e-4 and abs(ar[i][1] - yf) < 1e-4:
                 out[0][x][y] = U          # input: freestream x
                 out[1][x][y] = 0.0        # input: freestream y (always 0 here)
@@ -431,14 +528,53 @@ def read_coeffs(case):
     return data[:, header.index("Cl")], data[:, header.index("Cd")]
 
 
+def rel_range(a, floor):
+    """(max - min) / |mean| of the values a; the mean counts as at least floor."""
+    return float((a.max() - a.min()) / max(abs(a.mean()), floor))
+
+
+def force_summary(cl, cd):
+    """From the Cl and Cd histories: Cl and Cd averaged over the last AVERAGE iterations;
+    how much Cl varies over the last STEADY_WINDOW iterations (max - min, relative); and
+    how much Cd flips from one iteration to the next (half its range over the last
+    AVERAGE iterations, relative)."""
+    return (float(cl[-AVERAGE:].mean()), float(cd[-AVERAGE:].mean()),
+            rel_range(cl[-STEADY_WINDOW:], 0.05), 0.5 * rel_range(cd[-AVERAGE:], 0.001))
+
+
+def reversed_flow(surface, alpha):
+    """Fraction of the wing surface (2-98% of the chord) where the flow next to the wall runs
+    backwards, from the trailing towards the leading edge: separated flow. Uses the wall
+    shear stress along the chord. NaN without surface data."""
+    if "surf_tau" not in surface:
+        return float("nan")
+    a = np.radians(alpha)
+    chord = np.array([np.cos(a), np.sin(a)])  # leading -> trailing edge (see place_airfoil)
+    xc = 0.25 + (surface["surf_xy_tau"] - [0.25, 0.0]) @ chord  # position along the chord
+    along = surface["surf_tau"][:, :2] @ chord
+    # The flow is attached at 10-40% chord in all but extreme cases: that sets the sign of
+    # attached flow (OpenFOAM's sign convention for the wall shear stress can be either).
+    sign = np.sign(np.median(along[(xc > 0.1) & (xc < 0.4)]))
+    sel = (xc > 0.02) & (xc < 0.98)
+    return float(np.mean(sign * along[sel] < 0))
+
+
+def startup_seconds(log):
+    """Seconds until the first iteration had finished: reading the mesh, the wall distance
+    and setting up the sampling (the slow part with --sampling cloud)."""
+    with open(log) as f:
+        for line in f:
+            if line.startswith("ExecutionTime"):
+                return float(line.split()[2])
+    return float("nan")
+
+
 def read_surface(case):
     """Pressure and wall shear stress at the airfoil face centres, from system/surfaceData.
     Returns a dict for the .npz file (empty if nothing was written)."""
-    times = [d for d in glob.glob(os.path.join(case, "postProcessing", "surfaceData", "*"))
-             if is_number(os.path.basename(d))]
-    if not times:
+    tdir = latest_time_dir(os.path.join(case, "postProcessing", "surfaceData"))
+    if tdir is None:
         return {}
-    tdir = max(times, key=lambda d: float(os.path.basename(d)))
     out = {}
     for path in glob.glob(os.path.join(tdir, "**", "*.raw"), recursive=True):
         names = []
@@ -509,11 +645,13 @@ def tail(path, n=15):
 
 # ---------------------------------------------------------------- main
 
-CSV_HEADER = ("file,airfoil,alpha_deg,h_over_c,U,Cl,Cd,cl_change_last50,max_residual,"
-              "iterations,cells,seconds,solver,nutilda,bl,domain,refine,nutilda_scheme,bounded,last_bounded\n")
+CSV_HEADER = ("file,airfoil,alpha_deg,h_over_c,U,Cl,Cd,cl_range,cd_oscillation,converged,reversed_flow,"
+              "max_residual,iterations,cells,seconds,startup_seconds,solver,nutilda,bl,domain,refine,"
+              "nutilda_scheme,sampling,bounded,last_bounded\n")
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # show each line at once, also when sent to a log file
     p = argparse.ArgumentParser(description="Inverted airfoil in ground effect: OpenFOAM data generation.")
     p.add_argument("--samples", type=int, default=1, help="number of simulations (default 1)")
     p.add_argument("--airfoil", help="airfoil file, e.g. naca23012.dat, or nacaXXXX (default: random)")
@@ -535,6 +673,9 @@ def main():
                    help="incoming turbulent viscosity (default 3e-5 = 3 nu; the original dataset used 0.14)")
     p.add_argument("--nutilda-scheme", choices=list(NUTILDA_SCHEMES), default="cellLimited",
                    help="convection scheme for nuTilda (default cellLimited; the original used linearUpwind)")
+    p.add_argument("--sampling", choices=["lines", "cloud"], default="lines",
+                   help="sample the output grid row by row (default) or as one cloud of points "
+                        "(the original; searching for every point makes the start slow)")
     p.add_argument("--mesh-only", action="store_true", help="only make and check the mesh, do not solve")
     p.add_argument("--seed", type=int, help="random seed (default: random)")
     p.add_argument("--airfoil-dir",
@@ -581,6 +722,9 @@ def main():
             shutil.rmtree(case)
         shutil.copytree(template, case)
         setup_case(case, U, args.iterations, args.nutilda, args.free_air, args.solver, args.nutilda_scheme)
+        if args.sampling == "lines":
+            with open(os.path.join(case, "system", "internalCloud"), "w") as f:
+                f.write(line_sets())
 
         path = airfoil if os.path.isfile(airfoil) else os.path.join(args.airfoil_dir, airfoil)
         try:
@@ -618,61 +762,86 @@ def main():
             print(f"    simpleFoam failed, skipping. End of the log:\n{tail(log)}")
             continue
 
-        cloud = latest(os.path.join(case, "postProcessing", "internalCloud", "*", "cloud_p_U.xy"))
-        if cloud is None:
-            print(f"    no sampled flow field found, skipping. End of the log:\n{tail(log)}")
+        folder = latest_time_dir(os.path.join(case, "postProcessing", "internalCloud"))
+        if folder is None:
+            samples = np.zeros((0, 7))
+        elif args.sampling == "lines":
+            samples = read_rows(folder)[0]
+        else:
+            cloud = os.path.join(folder, "cloud_p_U.xy")
+            samples = np.loadtxt(cloud, ndmin=2) if os.path.exists(cloud) else np.zeros((0, 7))
+        if len(samples) < RES * RES // 4:  # at most about half the grid is airfoil or ground
+            print(f"    only {len(samples)} of the {RES * RES} grid points were sampled, skipping. "
+                  f"End of the log:\n{tail(log)}")
             continue
-        grid = to_grid(cloud, U)
+        grid = to_grid(samples, U)
 
         coeffs = read_coeffs(case)
         if coeffs is None:
             print("    warning: could not read the force coefficients")
-            cl = cd = cl_change = float("nan")
+            cl = cd = cl_range = cd_osc = float("nan")
         else:
-            cl, cd = float(coeffs[0][-1]), float(coeffs[1][-1])
-            last = coeffs[0][-50:]
-            cl_change = float((last.max() - last.min()) / max(abs(last.mean()), 0.05))
+            cl, cd, cl_range, cd_osc = force_summary(*coeffs)
         surface = read_surface(case)
         if "surf_p" not in surface or "surf_tau" not in surface:
             print("    warning: no surface pressure / wall shear stress found")
+        rev = reversed_flow(surface, alpha)
         res = final_residuals(log)
         max_res = max(res.values()) if res else float("nan")
         iters = last_iteration(log)
         bounded, last_bounded = bounded_iterations(log)
+        clipped_at_end = bounded > 0 and last_bounded > 0.9 * iters
+        converged = bool(cl_range < STEADY_TOL and not clipped_at_end)  # False if Cl is missing
         cells = cell_count(case)
+        startup = startup_seconds(log)
         seconds = time.time() - start
 
         tag = "free" if args.free_air else f"h{round(h * 1000):04d}"
         name = f"{basename}_{tag}_a{round(alpha * 100):+05d}_U{round(U * 10):04d}"
-        np.savez_compressed(os.path.join(args.out, name + ".npz"), a=grid,
+        sub = "" if converged else "not_converged"
+        os.makedirs(os.path.join(args.out, sub), exist_ok=True)
+        saved = os.path.join(args.out, sub, name + ".npz")
+        np.savez_compressed(saved, a=grid,
                             airfoil=basename, alpha=alpha, h=h, U=U,
                             ground_y=np.nan if args.free_air else ground_y,
-                            Cl=cl, Cd=cd, cl_change=cl_change, max_residual=max_res,
+                            Cl=cl, Cd=cd, cl_range=cl_range, cd_oscillation=cd_osc,
+                            converged=converged, reversed_flow=rev, max_residual=max_res,
                             iterations=iters, nutilda=args.nutilda, solver=args.solver,
                             bl=args.bl, domain=args.domain, refine=args.refine,
-                            nutilda_scheme=args.nutilda_scheme, bounded=bounded,
-                            last_bounded=last_bounded, cells=cells,
+                            nutilda_scheme=args.nutilda_scheme, sampling=args.sampling,
+                            bounded=bounded, last_bounded=last_bounded, cells=cells,
+                            seconds=seconds, startup_seconds=startup,
                             mesh_ok=ok, bl_first=bl_layers(U, args.refine)[0] if args.bl else np.nan,
-                            Cl_history=coeffs[0] if coeffs else np.array([]), **surface)
+                            Cl_history=coeffs[0] if coeffs else np.array([]),
+                            Cd_history=coeffs[1] if coeffs else np.array([]), **surface)
         new_csv = not os.path.exists(csv)
         with open(csv, "a") as f:
             if new_csv:
                 f.write(CSV_HEADER)
-            f.write(f"{name}.npz,{basename},{alpha:.4f},{h:.4f},{U:.3f},{cl:.5f},{cd:.5f},"
-                    f"{cl_change:.5f},{max_res:.3e},{iters},{cells},{seconds:.0f},"
-                    f"{args.solver},{args.nutilda:g},{int(args.bl)},{args.domain:g},"
-                    f"{args.refine:g},{args.nutilda_scheme},{bounded},{last_bounded}\n")
+            f.write(f"{os.path.join(sub, name + '.npz').replace(os.sep, '/')},{basename},{alpha:.4f},{h:.4f},"
+                    f"{U:.3f},{cl:.5f},{cd:.5f},{cl_range:.6f},{cd_osc:.5f},{int(converged)},{rev:.4f},"
+                    f"{max_res:.3e},{iters},{cells},{seconds:.0f},{startup:.0f},"
+                    f"{args.solver},{args.nutilda:g},{int(args.bl)},{args.domain:g},{args.refine:g},"
+                    f"{args.nutilda_scheme},{args.sampling},{bounded},{last_bounded}\n")
 
-        print(f"    done in {seconds:.0f} s after {iters} iterations")
-        print(f"    Cl = {cl:+.4f}  (negative = downforce),  Cd = {cd:.4f}")
+        print(f"    done in {seconds:.0f} s after {iters} iterations "
+              f"(the first iteration ended after {startup:.0f} s)")
+        print(f"    Cl = {cl:+.4f}  (negative = downforce),  Cd = {cd:.4f}  "
+              f"(both averaged over the last {AVERAGE} iterations)")
         print("    final residuals: " + ", ".join(f"{k} {v:.1e}" for k, v in res.items()))
         print(f"    nuTilda clipped below zero in {bounded} of {iters} iterations"
               + (f" (last in iteration {last_bounded})" if bounded else "")
-              + ("  <- still at the end: the nuTilda residual cannot converge"
-                 if bounded and last_bounded > 0.9 * iters else ""))
-        verdict = "steady" if cl_change < 0.01 else "NOT steady - look at this case before using it"
-        print(f"    Cl changed by {100 * cl_change:.2f}% over the last 50 iterations: {verdict}")
-        print(f"    saved {os.path.relpath(os.path.join(args.out, name + '.npz'), HERE)}")
+              + ("  <- still at the end" if clipped_at_end else ""))
+        print(f"    Cl varies by {100 * cl_range:.3f}% over the last {STEADY_WINDOW} iterations; "
+              f"Cd flips by +-{100 * cd_osc:.2f}% from one iteration to the next")
+        print(f"    flow reversed (separated) on {100 * rev:.0f}% of the wing surface")
+        if converged:
+            print("    converged")
+        else:
+            why = ([f"Cl still varies by {100 * cl_range:.2f}%"] if not cl_range < STEADY_TOL else []) \
+                + (["nuTilda still clipped at the end"] if clipped_at_end else [])
+            print(f"    NOT converged ({'; '.join(why)}): saved in not_converged/, not for training")
+        print(f"    saved {os.path.relpath(saved, HERE)}")
 
 
 if __name__ == "__main__":

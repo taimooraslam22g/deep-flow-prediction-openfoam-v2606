@@ -20,7 +20,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain). Next: numerical verification (scheme fix, grid convergence), then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain), numerical verification done (downforce mesh-converged within 0.04%, sampled flow field within 0.2%; runs without a steady solution are detected and kept out of the data). Next: faster sampling, validation in ground effect against experiments, then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
@@ -65,6 +65,14 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   20-chord domain is now the default. Also found that nuTilda is clipped in
   almost every iteration with the realistic turbulence level. Round 3 tests a
   fix, together with a grid convergence study.
+- **2026-11-09**: Mesh study, round 3 (numerical verification, 11 runs). A
+  limited gradient for nuTilda stops the clipping. On the default mesh,
+  downforce is mesh-converged within 0.04% (GCI). The sampled flow field is
+  within 0.2%, 16–70 times below the U-Net's error. Drag carries about 10%
+  numerical uncertainty. A very cambered wing close to the ground (S1223 at
+  h/c = 0.1) separates and has no steady solution, so the generator now
+  detects such runs and keeps them out of the training data. Also found:
+  locating the sample points took 37–66% of every run.
 
 ---
 
@@ -429,31 +437,178 @@ unlimited gradient) undershoots below zero where nuTilda drops steeply at the
 edge of the boundary layer, and OpenFOAM resets those cells in every
 iteration. This is why the nuTilda residual has stalled near 1e-3 since the
 first realistic run. With the original 0.14, the clipping stops after 15
-iterations and the residual converges. It probably also causes the small
+iterations and the residual converges. We suspected it also caused the small
 steps left in the suction-side skin friction (rms 3%). They are about 0.04
 chords apart, roughly the distance over which the boundary-layer edge climbs
-one mesh layer. Wall distance, surface shape and wall cells were checked and
-ruled out. Forces and pressures are steady (Cl changes by less than 0.01%
+one mesh layer. Round 3 showed that the steps stay when the clipping is gone,
+so they come from the mesh itself. Wall distance, surface shape and wall
+cells were checked and ruled out as causes of the clipping. Forces and pressures are steady (Cl changes by less than 0.01%
 over the last 50 iterations), but the dataset should come from clean,
 converging solutions.
 
-### Mesh study, round 3: numerical verification (running)
+### Mesh study, round 3: numerical verification
 
-With the round-2 settings, `verification.sh` runs 11 cases, 4 at a time on
-separate CPU cores. `verification_report.py` then makes the tables and figures.
-- **nuTilda scheme:** the original linearUpwind against the same scheme with a
-  limited gradient (`cellLimited`, now the default) and a TVD scheme
-  (`limitedLinear`). Each runs in free air against the LES and in ground
-  effect. Does the clipping stop, does the residual converge, and does the
-  answer change?
-- **Grid convergence:** two ground-effect cases, each on three meshes with every
-  cell √2 times smaller from one to the next (`--refine 0.7071, 1, 1.4142`,
-  about 25k, 50k and 100k cells). The cases are the NACA 23012 test case and a
-  hard one: the very cambered S1223 at 6°, h/c = 0.1 and 50 m/s. This gives
-  the grid convergence index (GCI; Celik et al., 2008) of Cl, Cd and the
-  sampled flow field. The flow-field error is measured the same way as the
-  U-Net's test error, so the two can be compared directly.
-- **Domain size at the largest ride height** (h/c = 0.6): 20 vs 40 chords.
+With the round-2 settings, `verification.sh` ran 11 cases of 2000 iterations
+each, 4 at a time on separate CPU cores (54 minutes in all).
+`verification_report.py` makes the tables and figures. It asks three
+questions:
+- Does a limited scheme stop the nuTilda clipping?
+- How far is the default mesh from the mesh-independent answer?
+- Is a 20-chord domain big enough at the largest ride height?
+
+Cl and Cd are averages over the last 100 iterations (see "the drag flips" below).
+
+**A. The nuTilda scheme.** The original linearUpwind is compared with two
+alternatives: the same scheme with a limited gradient (`cellLimited`), and
+the TVD scheme `limitedLinear`. Each runs in free air (the LES case) and in
+ground effect (NACA 23012, 4°, h/c = 0.2, 30 m/s):
+
+| Case | nuTilda scheme | Iterations with clipping | Most negative nuTilda clipped, last 100 iterations | Final nuTilda residual | Cl | Cd |
+|---|---|---|---|---|---|---|
+| free air | linearUpwind (round 2) | 1981 of 2000 | −8.6e-5 | 1.5e-3 | −0.9209 | 0.0190 |
+| free air | **cellLimited** | **0** | none | **7.5e-5** | −0.9209 | 0.0190 |
+| free air | limitedLinear | 1883 of 2000 | −2.2e-5 | 4.2e-4 | −0.9214 | 0.0190 |
+| ground effect | linearUpwind (round 2) | 1990 of 2000 | −2.7e-4 | 4.7e-3 | −1.1329 | 0.0181 |
+| ground effect | **cellLimited** | **10** (none after iteration 133) | none | **8.4e-5** | −1.1323 | 0.0181 |
+| ground effect | limitedLinear | 1950 of 2000 | −1.1e-4 | 5.2e-4 | −1.1328 | 0.0181 |
+
+![nuTilda residuals of the three schemes](results/scheme_test_residuals.png)
+
+- **The limited gradient stops the clipping; limitedLinear does not.** With
+  cellLimited, nothing is clipped in free air. In ground effect, clipping
+  happens only while the flow develops, in the first 133 iterations. The
+  final nuTilda residual is 20–56 times lower. limitedLinear still clips in
+  94–98% of the iterations. The clipped values were not rounding noise: up to
+  9 times the incoming nuTilda (3e-5), but negative.
+- **The forces hardly change**: Cl by at most 0.06%, Cd by at most 0.3%.
+- **The clipping did not cause the small steps in the skin friction.** They
+  stay with cellLimited (scatter 2.8% on the suction side in free air, 4.3% in
+  ground effect), so they come from the mesh.
+- **Against the LES**, the surface pressure is the same with all three
+  schemes. Between 15% and 40% chord, cellLimited's suction-side skin friction
+  is 2–5% lower than linearUpwind's (less than 1% further back). This is the
+  region just behind the LES trip (10% chord), where all three runs are
+  already below the LES. Its mean |ΔCf| on the suction side is 0.00038
+  instead of 0.00028 (7.6% instead of 5.6% of the mean LES value).
+  ([Figure](results/scheme_test_les.png))
+- **Decision: cellLimited stays the default.** A dataset should come from
+  solutions that actually converge, and the small local change in Cf is
+  smaller than the difference between RANS and LES there.
+
+**B. Grid convergence.** Each case runs on three meshes. Every cell is √2
+times smaller from one mesh to the next (`--refine 0.7071, 1, 1.4142`), so
+each mesh has about twice the cells of the previous one. The grid convergence
+index (GCI) follows Celik et al. (2008).
+
+NACA 23012, 4°, h/c = 0.2, 30 m/s:
+
+| Mesh | Cells | Cl | Cd | Cl within 0.5% of final from | y+ of the first cell, suction side (median / max) |
+|---|---|---|---|---|---|
+| fine (`--refine 1.4142`) | 99,563 | −1.1325 | 0.0175 | iteration 734 | 0.58 / 1.02 |
+| **medium (default)** | 50,360 | −1.1323 | 0.0181 | iteration 477 | 0.82 / 1.53 |
+| coarse (`--refine 0.7071`) | 25,480 | −1.1214 | 0.0192 | iteration 342 | 1.15 / 2.27 |
+| extrapolated to zero cell size | | −1.1327 | 0.0168 | | |
+
+| | Observed order of convergence | GCI, fine mesh | GCI, medium mesh |
+|---|---|---|---|
+| Cl | 11.7 | 0.02% (0.05% with safety factor 3) | **0.04%** (0.11% with safety factor 3) |
+| Cd | 1.7 | 5.4% | 9.7% |
+
+| Flow field, difference from the fine mesh (measured like the U-Net test error) | Pressure | Velocity |
+|---|---|---|
+| medium mesh (default) | **0.22%** | **0.15%** |
+| coarse mesh | 1.11% | 0.42% |
+
+![Grid convergence](results/grid_convergence.png)
+
+- **Downforce is mesh-converged on the default mesh.** Its GCI is 0.04%. The
+  observed order, 11.7, is far above the formal order 2. That means the
+  coarse mesh is not yet in the asymptotic range (its Cl is 1% off). The GCI
+  therefore uses order 2. Even with the more cautious safety factor 3
+  recommended for such cases (Roache, 1998), it is 0.11%.
+- **Drag converges more slowly.** It carries about 10% numerical uncertainty
+  on the default mesh, and the extrapolated Cd is 7.5% below the default
+  mesh's value. Drag depends on the thin boundary layer and wake, so it is
+  the most mesh-sensitive quantity in 2D RANS. For drag predictions, for
+  example the comparison with experiments, the fine mesh is the better
+  choice.
+- **The flow field that the U-Net learns is converged far below what the
+  network can resolve.** The default mesh differs from the fine one by 0.22%
+  in pressure and 0.15% in velocity, measured like the U-Net's test error. On
+  the original dataset, the U-Net's own errors are 14.9% (pressure) and 2.5%
+  (velocity): about 70 and 16 times larger.
+- **1000 iterations are enough on the default mesh.** Cl and Cd averaged over
+  iterations 901–1000 differ from those over 1901–2000 by 0.013% and 0.015%.
+  The fine mesh needs about 1500 iterations (0.16% and 0.27% after 1000).
+- **The drag flips between two values every iteration.** The flip is ±0.19%,
+  ±0.67% and ±1.9% on the fine, medium and coarse meshes, against ±0.002%
+  for Cl. The solver has settled into a cycle of two iterations. The cycle
+  appears with all three nuTilda schemes, and it is also the band in the
+  residual plot above. Averaging over the last 100 iterations removes it; with
+  last-iteration values, the Cd convergence order looked like 1.3 instead of
+  1.7. `groundGen.py` now saves the averages.
+
+S1223, 6°, h/c = 0.1, 50 m/s (the hard case):
+
+| Mesh | Cells | Cl | Cd | Cl range over the last 200 iterations | nuTilda clipped | Wing surface with reversed flow |
+|---|---|---|---|---|---|---|
+| fine | 114,167 | −2.66 | 0.145 | 2.6% | until the end | 19% |
+| medium | 57,677 | −2.85 | 0.161 | 12.3% | until the end | 19% |
+| coarse | 29,417 | −2.45 | 0.150 | 0.02% | until the end | 20% |
+
+- **This case has no steady solution.** On the side facing the ground, the
+  flow separates at about 62% chord on all three meshes. Behind that point,
+  the flow next to the wall runs backwards over the rest of that side (19% of
+  the whole surface).
+  - On the medium and fine meshes, the forces keep swinging, Cl by 2.6–12%
+    even after 2000 iterations.
+  - The coarse mesh looks steady only because its larger numerical
+    dissipation damps the motion. It still clips nuTilda in every iteration.
+  - A GCI needs converged solutions, so none is computed.
+- **This is the force-reduction region of ground effect.** Experiments on an
+  inverted wing found the same: below a critical ride height, the boundary
+  layer on the side facing the ground separates and the downforce stops
+  growing (Zerihan & Zhang, 2000). A steady RANS solver cannot represent this
+  unsteady flow.
+- **Consequence for the dataset: every run is now checked.**
+  - A run counts as converged if Cl varies by less than 0.1% over its last
+    200 iterations and nuTilda is no longer clipped at the end.
+  - Every normal run on the default mesh passes with a wide margin:
+    0.003–0.03% after 1000 iterations. The S1223 runs fail: the fine and medium on both criteria,
+    the coarse on the clipping.
+  - Runs that fail are saved in `not_converged/`, so they cannot slip into the
+    training data, and their share can be reported.
+  - Every sample also stores the share of the wing surface with reversed
+    flow.
+
+**C. Domain size at the largest ride height.** NACA 23012, 4°, h/c = 0.6:
+going from 20 to 40 chords changes Cl by 0.02% (−0.6985 vs −0.6986) and Cd by
+0.14%. So 20 chords is enough at every ride height in the planned range.
+
+**D. Cost: finding the sample points.** Before the first iteration, OpenFOAM
+searches the mesh for each of the 16,384 points of the output grid. In these
+runs, the start-up before the first iteration took 4 to 20 minutes, most of it
+this search. That is 37–66% of the run time, and in 9 of the 11 runs longer
+than the 2000 iterations themselves. `groundGen.py` now samples
+the same points as 128 lines, one per grid row (`--sampling lines`, the new
+default). OpenFOAM then searches only for the start of each line and walks
+along it from cell to cell. The lines contain exactly the original points.
+Inside the container, `sampling_test.py` re-sampled two finished round-2 runs
+this way (one in ground effect, one in free air). The masks and the values at
+every point were identical to the original samples. Re-sampling took 22–23 s,
+including reading the mesh and the fields. The start-up of those runs had
+taken 317 s and 152 s.
+
+**Decisions after round 3:**
+- Defaults stay: cellLimited, the medium mesh, 20 chords, 1000 iterations.
+- Cl and Cd are averages over the last 100 iterations.
+- Runs that do not converge are kept out of the training data.
+- The sample points are found row by row (`--sampling lines`): the same
+  samples, with a much faster start.
+
+**Next:** validation in ground effect against wind-tunnel data. Then a scan
+of the parameter ranges, to find where steady RANS converges, and finally
+the dataset.
 
 ---
 
@@ -514,7 +669,12 @@ python3 groundGen.py --mesh-only --airfoil naca4412 --alpha 5 --h 0.2   # check 
 python3 /work/scripts/view_sample.py data/train/<file>.npz /work/results/<name>.png
 bash mesh_study.sh       # mesh study, round 2
 bash verification.sh     # round 3: nuTilda scheme, grid convergence, domain (4 runs at a time)
+python3 sampling_test.py <work folder> <its sample .npz>   # check the row-by-row sampling on a finished run
 ```
+
+Runs that do not converge (Cl still changing, or nuTilda still clipped at the
+end) are saved in `not_converged/` inside the output folder, not with the
+training samples. `samples.csv` lists every run, with a `converged` column.
 
 ## Repository layout
 
@@ -535,6 +695,7 @@ ground_effect/mesh_study.sh       runs the mesh study, round 2 (inside the conta
 ground_effect/mesh_study_report.py  figures and tables of round 2
 ground_effect/verification.sh     round 3: nuTilda scheme, grid convergence, domain (inside the container)
 ground_effect/verification_report.py  tables and figures of round 3, including the GCI
+ground_effect/sampling_test.py    checks the row-by-row sampling on finished runs (inside the container)
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```
@@ -566,6 +727,13 @@ Other references used in the extension:
   "Procedure for estimation and reporting of uncertainty due to discretization
   in CFD applications", *Journal of Fluids Engineering* 130(7), 078001, 2008
   (the grid convergence index used in round 3).
+- P. J. Roache, *Verification and Validation in Computational Science and
+  Engineering*, Hermosa Publishers, 1998 (safety factor 3 for the GCI when
+  the observed order is unreliable).
+- J. Zerihan and X. Zhang, "Aerodynamics of a single element wing in ground
+  effect", *Journal of Aircraft* 37(6), 2000 (wind-tunnel tests of an
+  inverted wing above a moving ground; downforce reduction from flow
+  separation at small ride heights).
 
 Airfoil coordinates come from the UIUC Airfoil Coordinates Database
 (https://m-selig.ae.illinois.edu/ads/coord_database.html).
