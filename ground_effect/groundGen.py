@@ -13,13 +13,16 @@ What is different from the original:
   * the lift (downforce) and drag coefficients, the residuals, a convergence check and
     the surface pressure / wall shear stress are saved too
   * --free-air removes the ground (for validation against free-flight reference data)
-  * --bl adds thin boundary-layer cells along the airfoil, --domain sets the domain size
+  * a boundary-layer mesh (thin cells along the airfoil, first cell at y+ of about 1,
+    steady cell growth away from it) in a 20-chord domain; --refine makes every cell
+    smaller or larger (grid convergence study)
   * NACA 4-digit airfoils (e.g. naca4412) are generated from their formula if they are
     not in the airfoil folder
 
-Defaults are the settings chosen after the first validation (see README): incoming
-nuTilda = 3e-5 (3 x nu), SIMPLEC, 1000 iterations. The original dataset used
---nutilda 0.14 --solver simple --iterations 500.
+Defaults are the settings chosen by the validation and the mesh study (see README):
+incoming nuTilda = 3e-5 (3 x nu) with a limited convection scheme, SIMPLEC, 1000
+iterations, boundary-layer mesh, 20-chord domain. The original dataset used
+--nutilda 0.14 --nutilda-scheme linearUpwind --solver simple --iterations 500 --no-bl --domain 5.
 
 Each sample is saved in the same 6 x 128 x 128 layout as the original dataset, so the same
 U-Net code can train on it. The ground appears in the mask channel (2), like the airfoil.
@@ -28,7 +31,7 @@ Run it inside the Docker container, from /work/ground_effect:
     python3 groundGen.py --airfoil naca23012.dat --alpha 4 --h 0.2 --U 30   # one chosen case
     python3 groundGen.py --samples 50                                       # 50 random cases
     python3 groundGen.py --free-air --airfoil naca4412 --alpha 5 --U 10     # no ground
-    python3 groundGen.py --mesh-only --bl --airfoil naca4412 --alpha 5 --h 0.2   # mesh only
+    python3 groundGen.py --mesh-only --airfoil naca4412 --alpha 5 --h 0.2   # mesh only
 """
 import argparse
 import glob
@@ -54,11 +57,45 @@ RES = 128  # output grid: RES x RES points over x in [-0.5, 1.5], y in [-1, 1]
 SOLVER = {"simple": ("no", 0.3, 0.7, 0.7),     # the original case
           "simplec": ("yes", 1.0, 0.9, 0.9)}   # SIMPLEC: same answer, about 3.5x fewer iterations
 
-# Boundary layer (--bl): first cell height, growth ratio and total thickness, in chords.
-# 2e-4 puts the first cell centre at y+ of about 5 at 10 m/s and about 20 at 50 m/s,
-# which the Spalding wall function handles. The top layer (about 0.004) matches the
-# 0.005 cell size on the airfoil surface.
-BL_FIRST, BL_RATIO, BL_THICK = 2e-4, 1.15, 0.03
+# Convection scheme for nuTilda: (line added to gradSchemes, div(phi,nuTilda) scheme).
+# With a realistic (low) incoming nuTilda, the original scheme (linearUpwind with an
+# unlimited gradient) undershoots below zero at the edge of the boundary layer, and
+# OpenFOAM clips nuTilda in almost every iteration ("bounding nuTilda" in the log). The
+# nuTilda residual then stalls near 1e-3, and the skin friction gets small steps
+# (mesh study, round 2). Limiting the gradient or the interpolation prevents the undershoot.
+NUTILDA_SCHEMES = {
+    "linearUpwind": ("", "bounded Gauss linearUpwind grad(nuTilda)"),  # the original case
+    "cellLimited": ("grad(nuTilda)   cellLimited Gauss linear 1;",
+                    "bounded Gauss linearUpwind grad(nuTilda)"),
+    "limitedLinear": ("", "bounded Gauss limitedLinear 1"),
+}
+
+# Boundary-layer mesh (--bl). The first cell is thin enough to put its centre at y+ of
+# about 1, so the Spalart-Allmaras model resolves the wall region itself. (A first test
+# with a fixed 2e-4 put it at y+ 4-8, in the buffer layer, and gave a jagged skin
+# friction.) Its height comes from a flat-plate estimate of the skin friction at the
+# sample's Reynolds number (first_layer). The layers grow by BL_RATIO up to BL_THICK
+# chords, where they match the WALL_SIZE cells on the airfoil surface.
+BL_RATIO, BL_THICK = 1.15, 0.03
+WALL_SIZE = 0.005  # cell size along the airfoil surface, chords (as in the original mesh)
+NU = 1e-5  # kinematic viscosity, as in constant/transportProperties
+# Away from the wing, cells grow as WALL_SIZE + NEAR_GROWTH * distance (in chords),
+# whatever the domain size. (A first test showed that a larger domain otherwise coarsens
+# the cells near the wing, where we sample the flow.)
+NEAR_GROWTH = 0.05
+
+
+def first_layer(U, yplus=1.0):
+    """Height (in chords) of the first boundary-layer cell, so its centre is at about y+."""
+    cf = 0.026 * (U * 1.0 / NU) ** (-1 / 7)  # turbulent flat plate, chord Reynolds number
+    u_tau = 1.5 * U * np.sqrt(cf / 2)        # 1.5: faster flow near the suction peak
+    return 2 * yplus * NU / u_tau
+
+
+def bl_layers(U, refine=1.0):
+    """First cell height and growth ratio of the boundary layer. With --refine R every
+    cell is R times smaller, also across the boundary layer (R times more layers)."""
+    return first_layer(U) / refine, BL_RATIO ** (1 / refine)
 
 # gmsh text for the two airfoil/mesh variants
 ORIGINAL_EXTRUDE = """Extrude {0, 0, 1} {
@@ -87,9 +124,19 @@ Physical Surface("top") = {ex[5]};
 Physical Surface("aerofoil") = {ex[6], ex[7]};
 Physical Volume("internal") = {ex[1]};"""
 
+SIZE_FIELDS = """// Cells grow steadily with distance from the wing ({wall} + {g} * distance),
+// whatever the domain size, so the region we sample stays well resolved.
+Field[3] = Distance;
+Field[3].CurvesList = {{1000, 1001}};
+Field[3].Sampling = {sampling};
+Field[4] = MathEval;
+Field[4].F = "{wall} + {g} * F3";
+Field[5] = Min;
+Field[5].FieldsList = {{1, 4}};"""
+
 BL_FIELD = """// Boundary layer: thin quadrilateral cells along the airfoil. The first one is
-// {first} chords thick, each next one {ratio} times thicker, up to {thick} chords.
-// At the trailing-edge corners the layers fan out.
+// {first} chords thick (y+ about 1), each next one {ratio} times thicker, up to
+// {thick} chords. At the trailing-edge corners the layers fan out.
 Field[2] = BoundaryLayer;
 Field[2].CurvesList = {{1000, 1001}};
 Field[2].FanPointsList = {{{fans}}};
@@ -212,9 +259,9 @@ def set_patch_types(boundary, types):
         f.write(text)
 
 
-def setup_case(case, U, iterations, nutilda, free_air=False, solver="simplec"):
-    """Fill in the flow conditions. This must happen before meshing, because
-    gmshToFoam already reads system/controlDict."""
+def setup_case(case, U, iterations, nutilda, free_air=False, solver="simplec", scheme="cellLimited"):
+    """Fill in the flow conditions and solver settings. This must happen before meshing,
+    because gmshToFoam already reads system/controlDict."""
     fields = [os.path.join(case, "0", name) for name in ("U", "p", "nut", "nuTilda")]
     if free_air:
         for path in fields:
@@ -228,31 +275,42 @@ def setup_case(case, U, iterations, nutilda, free_air=False, solver="simplec"):
     consistent, rp, ru, rnt = SOLVER[solver]
     fill(os.path.join(case, "system", "fvSolution"),
          {"CONSISTENT": consistent, "RELAX_P": rp, "RELAX_U": ru, "RELAX_NUTILDA": rnt})
+    grad, div = NUTILDA_SCHEMES[scheme]
+    fill(os.path.join(case, "system", "fvSchemes"), {"GRAD_NUTILDA": grad, "DIV_NUTILDA": div})
 
 
-def make_mesh(case, pts, ground_y, h, free_air=False, domain=5.0, bl=False, blunt=False):
-    """Write airfoil.geo, mesh it with gmsh and convert it to OpenFOAM.
-    Returns None on success, or a short error message."""
+def make_mesh(case, pts, ground_y, h, free_air=False, domain=5.0, bl=False, blunt=False, U=10.0,
+              refine=1.0):
+    """Write airfoil.geo, mesh it with gmsh and convert it to OpenFOAM. refine > 1 makes
+    every cell that many times smaller. Returns None on success, or a short error message."""
     last = 1000 + len(pts) - 1
-    points = "".join(f"Point({1000 + i}) = {{ {px:.8f}, {py:.8f}, 0.00000000, 0.005}};\n"
+    wall = WALL_SIZE / refine
+    points = "".join(f"Point({1000 + i}) = {{ {px:.8f}, {py:.8f}, 0.00000000, {wall:.6g}}};\n"
                      for i, (px, py) in enumerate(pts))
     # about 10 cells across the gap; in free air the box is switched off (same size as outside)
-    edge_lc = 0.04 * domain  # 0.2 for the original 5-chord domain
-    lc_gap = edge_lc if free_air else np.clip(h / 10, 0.005, 0.02)
+    edge_lc = 0.04 * domain / refine  # 0.2 for the original 5-chord domain
+    lc_gap = edge_lc if free_air else np.clip(h / 10, 0.005, 0.02) / refine
     if bl:
         curves = f"Spline(1000) = {{1000:{last}}};\nLine(1001) = {{{last}, 1000}};"
         loop, extrude = "1000, 1001", BL_EXTRUDE
         # the trailing edge is the last point (place_airfoil reverses the order)
         fans = f"{last}, 1000" if blunt else f"{last}"
-        bl_field = BL_FIELD.format(first=BL_FIRST, ratio=BL_RATIO, thick=BL_THICK, fans=fans)
+        first, ratio = bl_layers(U, refine)
+        bl_field = BL_FIELD.format(first=f"{first:.3g}", ratio=f"{ratio:.4g}", thick=BL_THICK, fans=fans)
+        size_fields = SIZE_FIELDS.format(wall=f"{wall:.6g}", g=f"{NEAR_GROWTH / refine:.6g}",
+                                         sampling=round(400 * refine))
+        background = 5
     else:
         curves = f"Spline(1000) = {{1000:{last},1000}};"
         loop, extrude, bl_field = "1000", ORIGINAL_EXTRUDE, ""
+        size_fields, background = "", 1
     fill(os.path.join(case, "ground_template.geo"), {
         "POINTS": points,
         "AIRFOIL_CURVES": curves,
         "AIRFOIL_LOOP": loop,
         "EXTRUDE_AND_PHYSICAL": extrude,
+        "SIZE_FIELDS": size_fields,
+        "BACKGROUND": background,
         "BL_FIELD": bl_field,
         "EDGE_LC": f"{edge_lc:g}",
         "X_IN": f"{-domain:g}",
@@ -417,6 +475,20 @@ def final_residuals(log):
     return res
 
 
+def bounded_iterations(log):
+    """In how many iterations OpenFOAM had to clip negative nuTilda values, and the last
+    iteration in which it did. Some clipping at the start is harmless; clipping that goes
+    on until the end stops the residual from converging."""
+    count, last, it = 0, 0, 0
+    with open(log) as f:
+        for line in f:
+            if line.startswith("Time = "):
+                it = int(float(line.split("=")[1]))
+            elif line.startswith("bounding nuTilda"):
+                count, last = count + 1, it
+    return count, last
+
+
 def last_iteration(log):
     last = 0
     with open(log) as f:
@@ -438,7 +510,7 @@ def tail(path, n=15):
 # ---------------------------------------------------------------- main
 
 CSV_HEADER = ("file,airfoil,alpha_deg,h_over_c,U,Cl,Cd,cl_change_last50,max_residual,"
-              "iterations,cells,seconds,solver,nutilda,bl,domain\n")
+              "iterations,cells,seconds,solver,nutilda,bl,domain,refine,nutilda_scheme,bounded,last_bounded\n")
 
 
 def main():
@@ -449,14 +521,20 @@ def main():
     p.add_argument("--h", type=float, help="ride height as a fraction of the chord (default: random)")
     p.add_argument("--U", type=float, help="air speed in m/s (default: random)")
     p.add_argument("--free-air", action="store_true", help="no ground (for validation)")
-    p.add_argument("--bl", action="store_true", help="add thin boundary-layer cells along the airfoil")
-    p.add_argument("--domain", type=float, default=5.0,
-                   help="distance from the airfoil to the inlet, exit and top, in chords (default 5, as in the original)")
+    p.add_argument("--bl", action=argparse.BooleanOptionalAction, default=True,
+                   help="boundary-layer mesh: thin cells along the airfoil (first cell at y+ about 1) "
+                        "and steady cell growth away from it (default; --no-bl gives the original mesh)")
+    p.add_argument("--domain", type=float, default=20.0,
+                   help="distance from the airfoil to the inlet, exit and top, in chords (default 20; the original used 5)")
+    p.add_argument("--refine", type=float, default=1.0,
+                   help="make every cell this many times smaller (grid convergence study; default 1)")
     p.add_argument("--solver", choices=sorted(SOLVER), default="simplec",
                    help="simplec (default) or simple (the original settings)")
     p.add_argument("--iterations", type=int, default=1000, help="maximum solver iterations (default 1000)")
     p.add_argument("--nutilda", type=float, default=3e-5,
                    help="incoming turbulent viscosity (default 3e-5 = 3 nu; the original dataset used 0.14)")
+    p.add_argument("--nutilda-scheme", choices=list(NUTILDA_SCHEMES), default="cellLimited",
+                   help="convection scheme for nuTilda (default cellLimited; the original used linearUpwind)")
     p.add_argument("--mesh-only", action="store_true", help="only make and check the mesh, do not solve")
     p.add_argument("--seed", type=int, help="random seed (default: random)")
     p.add_argument("--airfoil-dir",
@@ -479,7 +557,9 @@ def main():
         with open(csv) as f:
             if f.readline() != CSV_HEADER:  # written by an older version: start a new file
                 csv = os.path.join(args.out, "samples2.csv")
-    mesh_text = f"{'boundary-layer' if args.bl else 'original'} mesh, domain {args.domain:g} chords"
+    mesh_text = (f"{'boundary-layer' if args.bl else 'original'} mesh"
+                 + (f" refined x{args.refine:g}" if args.refine != 1 else "")
+                 + f", domain {args.domain:g} chords")
 
     for n in range(args.samples):
         # draw all random values every time, so a given seed always gives the same cases
@@ -493,14 +573,14 @@ def main():
         basename = os.path.splitext(os.path.basename(airfoil))[0]
         where = "free air" if args.free_air else f"h/c {h:.3f}"
         print(f"Run {n}: {basename}, alpha {alpha:+.2f} deg, {where}, U {U:.1f} m/s"
-              f" ({args.solver}, nuTilda {args.nutilda:g}, {mesh_text})")
+              f" ({args.solver}, nuTilda {args.nutilda:g} with {args.nutilda_scheme}, {mesh_text})")
         start = time.time()
 
         # fresh copy of the case, so nothing from an earlier run can be reused by mistake
         if os.path.exists(case):
             shutil.rmtree(case)
         shutil.copytree(template, case)
-        setup_case(case, U, args.iterations, args.nutilda, args.free_air, args.solver)
+        setup_case(case, U, args.iterations, args.nutilda, args.free_air, args.solver, args.nutilda_scheme)
 
         path = airfoil if os.path.isfile(airfoil) else os.path.join(args.airfoil_dir, airfoil)
         try:
@@ -518,7 +598,7 @@ def main():
             print("    warning: the ground is below the sampled window (y = -1), "
                   "so it will not show up in the mask")
 
-        err = make_mesh(case, pts, ground_y, h, args.free_air, args.domain, args.bl, blunt)
+        err = make_mesh(case, pts, ground_y, h, args.free_air, args.domain, args.bl, blunt, U, args.refine)
         if err:
             print(f"    {err}, skipping. End of the log:\n{tail(os.path.join(case, 'log.' + err.split()[0]))}")
             continue
@@ -526,7 +606,8 @@ def main():
         faces = patch_faces(case)
         print(f"    mesh: {cell_count(case):,} cells ({summary})")
         print("    boundary faces: " + ", ".join(f"{k} {v}" for k, v in faces.items() if k not in ("front", "back"))
-              + (f"; trailing edge {'blunt' if blunt else 'sharp'}" if args.bl else ""))
+              + (f"; trailing edge {'blunt' if blunt else 'sharp'}, first cell {bl_layers(U, args.refine)[0]:.2g} chords"
+                 if args.bl else ""))
         if args.mesh_only:
             print(f"    mesh only: the case is in {os.path.relpath(case, HERE)}")
             continue
@@ -557,6 +638,8 @@ def main():
         res = final_residuals(log)
         max_res = max(res.values()) if res else float("nan")
         iters = last_iteration(log)
+        bounded, last_bounded = bounded_iterations(log)
+        cells = cell_count(case)
         seconds = time.time() - start
 
         tag = "free" if args.free_air else f"h{round(h * 1000):04d}"
@@ -566,19 +649,27 @@ def main():
                             ground_y=np.nan if args.free_air else ground_y,
                             Cl=cl, Cd=cd, cl_change=cl_change, max_residual=max_res,
                             iterations=iters, nutilda=args.nutilda, solver=args.solver,
-                            bl=args.bl, domain=args.domain, mesh_ok=ok,
+                            bl=args.bl, domain=args.domain, refine=args.refine,
+                            nutilda_scheme=args.nutilda_scheme, bounded=bounded,
+                            last_bounded=last_bounded, cells=cells,
+                            mesh_ok=ok, bl_first=bl_layers(U, args.refine)[0] if args.bl else np.nan,
                             Cl_history=coeffs[0] if coeffs else np.array([]), **surface)
         new_csv = not os.path.exists(csv)
         with open(csv, "a") as f:
             if new_csv:
                 f.write(CSV_HEADER)
             f.write(f"{name}.npz,{basename},{alpha:.4f},{h:.4f},{U:.3f},{cl:.5f},{cd:.5f},"
-                    f"{cl_change:.5f},{max_res:.3e},{iters},{cell_count(case)},{seconds:.0f},"
-                    f"{args.solver},{args.nutilda:g},{int(args.bl)},{args.domain:g}\n")
+                    f"{cl_change:.5f},{max_res:.3e},{iters},{cells},{seconds:.0f},"
+                    f"{args.solver},{args.nutilda:g},{int(args.bl)},{args.domain:g},"
+                    f"{args.refine:g},{args.nutilda_scheme},{bounded},{last_bounded}\n")
 
         print(f"    done in {seconds:.0f} s after {iters} iterations")
         print(f"    Cl = {cl:+.4f}  (negative = downforce),  Cd = {cd:.4f}")
         print("    final residuals: " + ", ".join(f"{k} {v:.1e}" for k, v in res.items()))
+        print(f"    nuTilda clipped below zero in {bounded} of {iters} iterations"
+              + (f" (last in iteration {last_bounded})" if bounded else "")
+              + ("  <- still at the end: the nuTilda residual cannot converge"
+                 if bounded and last_bounded > 0.9 * iters else ""))
         verdict = "steady" if cl_change < 0.01 else "NOT steady - look at this case before using it"
         print(f"    Cl changed by {100 * cl_change:.2f}% over the last 50 iterations: {verdict}")
         print(f"    saved {os.path.relpath(os.path.join(args.out, name + '.npz'), HERE)}")

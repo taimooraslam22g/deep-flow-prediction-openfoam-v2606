@@ -5,10 +5,11 @@
 //   - the bottom edge of the domain is the ground, at a variable height
 //   - a refinement box gives finer cells in the gap between airfoil and ground
 //   - the domain size is a parameter (original: 5 chords from the airfoil)
-//   - optional boundary layer (--bl): thin quadrilateral cells along the airfoil.
-//     The airfoil is then one spline plus a short straight trailing-edge segment,
-//     so that the trailing-edge corners are real corners where gmsh can fan out
-//     the layers.
+//   - optional boundary-layer mesh (--bl): thin quadrilateral cells along the
+//     airfoil, and cell sizes that grow steadily with distance from the airfoil
+//     whatever the domain size. The airfoil is then one spline plus a short
+//     straight trailing-edge segment, so that the trailing-edge corners are real
+//     corners where gmsh can fan out the layers.
 // Without --bl the airfoil curve and the surface numbering are exactly as in the
 // original.
 
@@ -45,6 +46,7 @@ Field[1].YMax = @BOX_YMAX@;
 Field[1].ZMin = -1;
 Field[1].ZMax = 2;
 Field[1].Thickness = 0.3;
-Background Field = 1;
+@SIZE_FIELDS@
+Background Field = @BACKGROUND@;
 
 @BL_FIELD@

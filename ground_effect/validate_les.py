@@ -31,15 +31,37 @@ AIRFOIL_DIR = os.path.join(HERE, "..", "Deep-Flow-Prediction", "data", "airfoil_
 
 
 def les_side(mat, key):
-    """x/c, Cp and Cf along one side of the wing, from the LES statistics."""
+    """x/c, Cp and Cf along one side of the wing, from the LES statistics. Both are
+    based on the freestream dynamic pressure, like the RANS values."""
     st = mat[key]
     x = np.array([float(s["xa"]) for s in st])
     # The stored pressure has an arbitrary offset. Outside the boundary layer the total
     # pressure P + |U|^2/2 is constant and equals P_inf + 1/2 (U_inf = 1), which gives P_inf.
     p0 = np.mean([s["P"][-1] + 0.5 * (s["U"][-1] ** 2 + s["V"][-1] ** 2) for s in st])
     cp = np.array([2 * (s["P"][0] - (p0 - 0.5)) for s in st])
-    cf = np.array([float(s["Cf"]) for s in st])
+    # The stored Cf is NOT based on the freestream: it is 2 (u_tau / U_edge)^2, with U_edge
+    # the peak of each velocity profile (up to 1.49 U_inf on the suction side). The LES is
+    # scaled with U_inf = 1 and the chord, so 2 u_tau^2 is the freestream-based value.
+    cf = np.array([2 * float(s["ut"]) ** 2 for s in st])
     return x, cp, cf
+
+
+def to_upright(xy, alpha_deg):
+    """Undo groundGen.place_airfoil: rotate back about the quarter chord, flip again.
+    Returns x and y of the points in the frame of the upright airfoil."""
+    a = np.radians(alpha_deg)
+    dx, y = xy[:, 0] - 0.25, xy[:, 1]
+    return 0.25 + dx * np.cos(a) + y * np.sin(a), dx * np.sin(a) - y * np.cos(a)
+
+
+def top_side(name):
+    """A function telling whether upright (x, y) points lie on the upper (suction) side,
+    using the camber line of the airfoil."""
+    file = os.path.join(AIRFOIL_DIR, name + ".dat")
+    ar = load_airfoil(file if os.path.isfile(file) else os.path.join(AIRFOIL_DIR, name))
+    le = np.argmin(ar[:, 0])
+    up, lo = ar[:le + 1][::-1], ar[le:]  # both from the leading to the trailing edge
+    return lambda x, y: y > 0.5 * (np.interp(x, up[:, 0], up[:, 1]) + np.interp(x, lo[:, 0], lo[:, 1]))
 
 
 def rans(spec):
@@ -48,26 +70,12 @@ def rans(spec):
     z = np.load(path)
     if "surf_p" not in z.files or "surf_tau" not in z.files:
         sys.exit(f"{path} has no surface data")
-    a, U = np.radians(float(z["alpha"])), float(z["U"])
+    alpha, U = float(z["alpha"]), float(z["U"])
+    a = np.radians(alpha)
     q = 0.5 * U * U  # dynamic pressure (kinematic, as in OpenFOAM)
-
-    def upright(xy):
-        """Undo groundGen.place_airfoil: rotate back about the quarter chord, flip again."""
-        dx, y = xy[:, 0] - 0.25, xy[:, 1]
-        return 0.25 + dx * np.cos(a) + y * np.sin(a), dx * np.sin(a) - y * np.cos(a)
-
-    # camber line of the upright airfoil, to tell the two sides apart
-    name = str(z["airfoil"])
-    file = os.path.join(AIRFOIL_DIR, name + ".dat")
-    ar = load_airfoil(file if os.path.isfile(file) else os.path.join(AIRFOIL_DIR, name))
-    le = np.argmin(ar[:, 0])
-    up, lo = ar[:le + 1][::-1], ar[le:]  # both from the leading to the trailing edge
-
-    def is_top(x, y):
-        return y > 0.5 * (np.interp(x, up[:, 0], up[:, 1]) + np.interp(x, lo[:, 0], lo[:, 1]))
-
-    xp, yp = upright(z["surf_xy_p"])
-    xt, yt = upright(z["surf_xy_tau"])
+    is_top = top_side(str(z["airfoil"]))
+    xp, yp = to_upright(z["surf_xy_p"], alpha)
+    xt, yt = to_upright(z["surf_xy_tau"], alpha)
     tau = z["surf_tau"]
     tx = tau[:, 0] * np.cos(a) + tau[:, 1] * np.sin(a)  # x component in the upright frame
     cf = np.sign(tx) * np.hypot(tau[:, 0], tau[:, 1]) / q

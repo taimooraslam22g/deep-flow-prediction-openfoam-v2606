@@ -20,7 +20,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress: setup works. Turbulence level and solver chosen by validation against LES. Next: mesh study, then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain). Next: numerical verification (scheme fix, grid convergence), then the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
@@ -53,6 +53,18 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
   than the original 0.14. Skin friction and drag are off with both, because of
   the mesh. SIMPLEC gives the same answer as SIMPLE in 3.5× fewer iterations.
   Both choices are now the defaults. Next: a mesh study.
+- **2026-11-09**: Mesh study, round 1. A boundary-layer mesh in a 20-chord
+  domain matches the LES surface pressure 2.5–4 times better than the original
+  mesh. Two problems found and fixed for round 2: the first cell was at y+ 4–8,
+  and a larger domain coarsened the cells near the wing.
+- **2026-11-09**: Mesh study, round 2. With the first cell at y+ ≈ 1, skin
+  friction matches the LES within 6–7% on average. Getting there needed a correction:
+  the LES files normalise skin friction with the local edge velocity, not the
+  freestream, so all earlier Cf comparisons were redone. In ground effect, going
+  from 20 to 40 chords changes Cl by 0.1%, so the boundary-layer mesh in a
+  20-chord domain is now the default. Also found that nuTilda is clipped in
+  almost every iteration with the realistic turbulence level. Round 3 tests a
+  fix, together with a grid convergence study.
 
 ---
 
@@ -113,6 +125,11 @@ small, so small absolute errors become large relative errors.
 
 **Caveat:** a single training run can be lucky or unlucky. See the repeated
 seeds below.
+
+![Learning curve](results/learning_curve_expo5_6k.png)
+
+*Training and validation L1 loss per epoch. Both fall steadily and end close
+together (0.0060 / 0.0053), so the model is not overfitting.*
 
 ### Run 2: same setup, 5 random seeds
 
@@ -188,6 +205,7 @@ but with the airfoil upside down above a moving ground. The code is in
 | Ground placed a distance *h* (the ride height) below the airfoil's lowest point | The new design parameter |
 | Ground moves at the air speed | Seen from the car, the road moves backwards at the same speed as the air, so the ground has no boundary layer |
 | Finer mesh in the gap (gmsh Box field, about 10 cells across it) | The strongest flow is in the gap |
+| Thin cell layers along the wing (first cell at y+ ≈ 1) and a 20-chord domain | Chosen by the mesh study below: surface pressure and skin friction match the LES, and in ground effect the result no longer depends on the domain size |
 | Same 6 × 128 × 128 sample format, with the ground in the mask channel | The same U-Net code can train on it |
 | Cl, Cd, residuals, Cl history and surface pressure / wall shear stress stored with every sample | Physics checks and data quality control |
 
@@ -216,6 +234,8 @@ The same case run with two levels of incoming turbulence, up to 3000 iterations:
 - **The solver's residual limit is not a reliable stop signal.** One run stopped
   while Cl was still drifting. The other never stopped, although Cl had been
   steady for a long time. The Cl history is used to judge convergence instead.
+  (The stalled nuTilda residual was later traced to nuTilda being clipped in
+  every iteration, see mesh study round 2.)
 - **The incoming turbulence level matters.** The original value
   (nuTilda = 0.14 m²/s) is 14,000 times the molecular viscosity (ν = 1e-5 m²/s).
   The usual recommendation for this model is 3–5 ν (Spalart & Rumsey, 2007).
@@ -235,8 +255,11 @@ Our 10 m/s, 1 m chord and ν = 1e-5 m²/s give exactly Re = 1M.
 
 | Incoming nuTilda | Cl | Cd | Mean \|ΔCp\| suction side | Mean \|ΔCp\| pressure side | Mean \|ΔCf\| suction side | Mean \|ΔCf\| pressure side |
 |---|---|---|---|---|---|---|
-| 0.14 m²/s (original) | 0.818 | 0.0488 | 0.053 | 0.025 | 0.00073 | 0.00144 |
-| 3e-5 m²/s (3ν) | 0.876 | 0.0275 | **0.033** | **0.021** | 0.00089 | 0.00175 |
+| 0.14 m²/s (original) | 0.818 | 0.0488 | 0.053 | 0.025 | 0.00169 | 0.00077 |
+| 3e-5 m²/s (3ν) | 0.876 | 0.0275 | **0.033** | **0.021** | 0.00158 | 0.00107 |
+
+(The Cf columns were corrected after mesh study round 2: the LES files
+normalise skin friction differently from us. See the note there.)
 
 ![Validation against LES](results/validation_naca4412_re1M.png)
 
@@ -245,8 +268,9 @@ Our 10 m/s, 1 m chord and ν = 1e-5 m²/s give exactly Re = 1M.
   LES. The pressure at the nose (the stagnation point) is Cp ≈ 1.0, as it must
   be. With 0.14 it is 1.25, which only happens in an unrealistically viscous
   flow.
-- **Neither setting predicts skin friction or drag well.** Cf is 30–50% off and
-  Cd is 2–4 times too high for this airfoil. The turbulence level is not the
+- **Neither setting predicts skin friction or drag well on this mesh.** Cf is
+  about 30% off on average, and Cd (0.028 and 0.049) is far above the 0.017–0.019
+  of the finer meshes in the mesh study below. The turbulence level is not the
   cause; the mesh is. Only triangles about 0.005 chords in size touch the wall
   (picture below), so the thin boundary layer (0.005–0.04 chords) gets 1–6
   cells across it. The domain also reaches only 5 chords from the wing.
@@ -279,16 +303,157 @@ iterations: about 1 minute per sample instead of 4.
 - **Incoming nuTilda = 3ν = 3e-5 m²/s, SIMPLEC and 1000 iterations** are now
   the defaults of `groundGen.py`. The original setup is still available with
   `--nutilda 0.14 --solver simple --iterations 500`.
-- **Next: a mesh study.** It compares the original mesh with a boundary-layer
-  mesh (`--bl`: 23 thin quadrilateral layers along the wing, the first one
-  0.0002 chords thick), in a 5-chord and a 20-chord domain (`--domain 20`). Each
-  combination is checked against the LES again (`mesh_study.sh`, then
-  `mesh_study_report.py`).
+- **Next: a mesh study** (below).
 
-![Learning curve](results/learning_curve_expo5_6k.png)
+### Mesh study, round 1
 
-*Training and validation L1 loss per epoch. Both fall steadily and end close
-together (0.0060 / 0.0053), so the model is not overfitting.*
+This round compared the original mesh with a boundary-layer mesh (`--bl`:
+thin quadrilateral layers along the wing, the first one 0.0002 chords thick),
+each in a 5-chord and a 20-chord domain (`--domain 20`). The case is the
+free-air NACA 4412 at Re = 1M, checked against the LES:
+
+| Mesh | Domain | Cl | Cd | Mean \|ΔCp\| suction side | Mean \|ΔCp\| pressure side | Mean \|ΔCf\| suction side | Mean \|ΔCf\| pressure side |
+|---|---|---|---|---|---|---|---|
+| original | 5 chords | 0.875 | 0.0276 | 0.034 | 0.021 | 0.00159 | 0.00108 |
+| original | 20 chords | 0.978 | 0.0158 | 0.036 | 0.033 | 0.00161 | 0.00113 |
+| boundary layer | 5 chords | 0.819 | 0.0309 | 0.043 | 0.020 | 0.00094 | 0.00032 |
+| boundary layer | 20 chords | 0.906 | 0.0202 | **0.013** | **0.008** | **0.00069** | 0.00036 |
+
+(Cf columns corrected after round 2, see the note there.)
+
+![Mesh study, round 1](results/validation_mesh_study.png)
+
+![Boundary-layer mesh, round 1](results/mesh_bl_naca4412.png)
+
+**What round 1 showed:**
+- **The boundary-layer mesh in the 20-chord domain matches the LES surface
+  pressure 2.5–4 times better** than any other combination.
+- **Domain size matters.** Going from 5 to 20 chords raises Cl by 11–12% and
+  cuts Cd by 35–43%.
+- **The boundary-layer mesh brings skin friction 2–3 times closer to the LES**,
+  but the suction-side Cf became jagged. Its first cell sat at y+ 4–8
+  (measured with `mesh_quality.py`). That is the buffer layer, where neither
+  the wall-resolved nor the wall-function treatment works well.
+- **The larger domain coarsened the cells near the wing.** The sampled window
+  had 37% fewer cells, and in ground effect cells 1 chord from the wing were up
+  to 3 times larger. gmsh interpolates the cell size between the wing and the
+  now distant, coarse outer boundary.
+- **In ground effect the mesh matters too.** For the NACA 23012 test case the
+  downforce changed from Cl −1.30 (original mesh) to −1.12.
+
+### Mesh study, round 2
+
+This round fixes both problems:
+- The first cell height is set from each sample's speed, so that y+ is about 1
+  (`first_layer` in `groundGen.py`). This gives 36–46 layers between 10 and
+  50 m/s.
+- Cell sizes grow as 0.005 + 0.05 × distance from the wing (in chords),
+  whatever the domain size.
+
+It also checks 5, 20 and 40-chord domains, in free air against the LES and in
+ground effect (`mesh_study.sh`, then `mesh_study_report.py`).
+
+Free air, NACA 4412 at 5°, Re = 1M, against the LES:
+
+| Domain | Cells (in the sampled window) | \|Cl\| | Cd | Mean \|ΔCp\| suction / pressure side | Mean \|ΔCf\| suction / pressure side |
+|---|---|---|---|---|---|
+| 5 chords | 50,736 (36,627) | 0.834 | 0.0299 | 0.038 / 0.019 | 0.00036 / 0.00020 |
+| 20 chords | 59,076 (36,187) | 0.921 | 0.0190 | **0.009** / 0.014 | 0.00028 / 0.00025 |
+| 40 chords | 63,178 (35,915) | 0.937 | 0.0167 | 0.010 / 0.018 | **0.00027** / 0.00026 |
+
+Ground effect, NACA 23012 at 4°, h/c = 0.2, 30 m/s:
+
+| Mesh | Domain | Cells | Cl | Cd | Cl within 0.5% of final from | Time, 2000 iterations |
+|---|---|---|---|---|---|---|
+| original (triangles at the wall) | 5 chords | 21,695 | −1.3035 | 0.0126 | iteration 406 | (3000 iterations: 361 s) |
+| round 1: boundary layer, y+ 4–8 | 20 chords | 23,614 | −1.1249 | 0.0203 | iteration 442 | 385 s |
+| round 2: boundary layer, y+ ≈ 1 | 20 chords | 50,360 | −1.1329 | 0.0182 | iteration 466 | 604 s |
+| round 2: boundary layer, y+ ≈ 1 | 40 chords | 52,413 | −1.1315 | 0.0181 | iteration 471 | 624 s |
+
+![Mesh study, round 2: progress against the LES](results/validation_mesh_progress.png)
+
+![Mesh study, round 2: domain size](results/validation_domain_study.png)
+
+![Boundary-layer mesh, round 2, in ground effect](results/mesh_bl2_ground.png)
+
+*The round-2 mesh in ground effect (the ground is the bottom edge of the left
+picture). Thin layers wrap the nose and fan out at both corners of the blunt
+trailing edge.* More pictures: [the mesh around the NACA 4412](results/mesh_bl2_naca4412.png),
+[the S1223 at 50 m/s](results/mesh_bl2_s1223_U50.png) (thinnest first cell,
+7e-6 chords), and [the Cl histories](results/convergence_bl2_ground.png).
+
+**What round 2 showed:**
+- **y+ ≈ 1 along the whole wing**: median 0.6–0.8, at most 1.2 (free air,
+  10 m/s) and 1.5 (ground effect, 30 m/s).
+- **Skin friction now matches the LES within 6–7% on average**: mean |ΔCf|
+  0.00028 / 0.00025 is 5.6% / 7.2% of the mean LES value, against 31% for the
+  original mesh. The surface pressure stays as close as in round 1.
+- **The domain no longer changes the mesh near the wing.** The sampled window
+  has 35,900–36,600 cells in all three domains, and the median cell size at each
+  distance from the wing agrees within a few percent (round 1: 37% fewer cells
+  at 20 chords).
+- **Domain size in free air:** lift keeps growing with the domain size R, as
+  Cl∞ − Cl ∝ 1/R. The far field of a lifting wing decays only as 1/distance,
+  and the far-field boundary forces the undisturbed flow onto it. Extrapolating
+  from 20 and 40 chords gives Cl∞ ≈ 0.952, which also predicts the 5-chord
+  value within 1%. 20 chords is 3.3% low, 40 chords 1.6%. The agreement with the
+  LES is equally good at 20 and 40 chords.
+- **Domain size in ground effect: 20 chords is enough.** From 20 to 40 chords,
+  Cl changes by 0.13% and Cd by 0.6%. With a ground, the wing's mirror image
+  below it cancels most of the far field (a vortex pair decays as
+  1/distance²). Round 3 checks this at the largest ride height.
+- **The mesh decides the downforce.** The two boundary-layer meshes agree
+  within 0.7% in Cl. The original mesh over-predicted the downforce by 15% and
+  under-predicted the drag by 30%.
+- **Decision:** the boundary-layer mesh with y+ ≈ 1 and a 20-chord domain are
+  now the defaults of `groundGen.py` (`--no-bl --domain 5` gives the original
+  mesh). A sample takes about 5 minutes for 1000 iterations on one CPU core.
+
+**Correction: how the LES files define skin friction.** The Cf stored in the
+WING LES files is based on the local edge velocity U_e, the peak of each
+velocity profile, not on the freestream: Cf = 2(u_τ/U_e)². On the suction
+side U_e reaches 1.49 U∞. Our RANS values, like most CFD, use the freestream.
+The files also store u_τ, so `validate_les.py` now uses Cf = 2u_τ²/U∞² for
+the LES. This was checked at every station: the stored Cf equals
+2(u_τ/U_max)² exactly at all 100 stations. All Cf numbers and figures in this README use
+the corrected comparison. Before the correction, the boundary-layer meshes
+looked about twice too high on the suction side and the original mesh looked
+best. With matching definitions the order reverses: each mesh improvement
+brings Cf closer to the LES. The remaining difference just after 15% chord is
+expected, because the LES boundary layer was tripped at 10% chord.
+
+**Found: nuTilda is clipped in almost every iteration.** Every run with the
+realistic incoming nuTilda (3e-5) printed `bounding nuTilda` in more than 99%
+of its iterations. The convection scheme for nuTilda (linearUpwind with an
+unlimited gradient) undershoots below zero where nuTilda drops steeply at the
+edge of the boundary layer, and OpenFOAM resets those cells in every
+iteration. This is why the nuTilda residual has stalled near 1e-3 since the
+first realistic run. With the original 0.14, the clipping stops after 15
+iterations and the residual converges. It probably also causes the small
+steps left in the suction-side skin friction (rms 3%). They are about 0.04
+chords apart, roughly the distance over which the boundary-layer edge climbs
+one mesh layer. Wall distance, surface shape and wall cells were checked and
+ruled out. Forces and pressures are steady (Cl changes by less than 0.01%
+over the last 50 iterations), but the dataset should come from clean,
+converging solutions.
+
+### Mesh study, round 3: numerical verification (running)
+
+With the round-2 settings, `verification.sh` runs 11 cases, 4 at a time on
+separate CPU cores. `verification_report.py` then makes the tables and figures.
+- **nuTilda scheme:** the original linearUpwind against the same scheme with a
+  limited gradient (`cellLimited`, now the default) and a TVD scheme
+  (`limitedLinear`). Each runs in free air against the LES and in ground
+  effect. Does the clipping stop, does the residual converge, and does the
+  answer change?
+- **Grid convergence:** two ground-effect cases, each on three meshes with every
+  cell √2 times smaller from one to the next (`--refine 0.7071, 1, 1.4142`,
+  about 25k, 50k and 100k cells). The cases are the NACA 23012 test case and a
+  hard one: the very cambered S1223 at 6°, h/c = 0.1 and 50 m/s. This gives
+  the grid convergence index (GCI; Celik et al., 2008) of Cl, Cd and the
+  sampled flow field. The flow-field error is measured the same way as the
+  U-Net's test error, so the two can be compared directly.
+- **Domain size at the largest ride height** (h/c = 0.6): 20 vs 40 chords.
 
 ---
 
@@ -345,9 +510,10 @@ lists all options):
 cd /work/ground_effect
 python3 groundGen.py --airfoil naca23012.dat --alpha 4 --h 0.2 --U 30   # one case
 python3 groundGen.py --free-air --airfoil naca4412 --alpha 5 --U 10      # no ground
-python3 groundGen.py --mesh-only --bl --airfoil naca4412 --alpha 5 --h 0.2   # check a mesh
+python3 groundGen.py --mesh-only --airfoil naca4412 --alpha 5 --h 0.2   # check a mesh
 python3 /work/scripts/view_sample.py data/train/<file>.npz /work/results/<name>.png
-bash mesh_study.sh                                                        # the mesh study
+bash mesh_study.sh       # mesh study, round 2
+bash verification.sh     # round 3: nuTilda scheme, grid convergence, domain (4 runs at a time)
 ```
 
 ## Repository layout
@@ -363,9 +529,12 @@ ground_effect/groundGen.py        data generation: inverted airfoil above a movi
 ground_effect/case_template/      OpenFOAM case and gmsh template for ground effect
 ground_effect/plot_convergence.py Cl and Cd histories of runs
 ground_effect/plot_mesh.py        draws the mesh around the wing
+ground_effect/mesh_quality.py     y+ of the first cell, and cell sizes in the sampled window
 ground_effect/validate_les.py     free-air runs vs LES surface pressure and skin friction
-ground_effect/mesh_study.sh       runs the mesh study (inside the container)
-ground_effect/mesh_study_report.py  figures and tables of the mesh study
+ground_effect/mesh_study.sh       runs the mesh study, round 2 (inside the container)
+ground_effect/mesh_study_report.py  figures and tables of round 2
+ground_effect/verification.sh     round 3: nuTilda scheme, grid convergence, domain (inside the container)
+ground_effect/verification_report.py  tables and figures of round 3, including the GCI
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```
@@ -390,7 +559,13 @@ Other references used in the extension:
 - P. R. Spalart and C. L. Rumsey, "Effective inflow conditions for turbulence
   models in aerodynamic calculations", *AIAA Journal* 45(10), 2007.
 - R. Vinuesa et al., "Turbulent boundary layers around wing sections up to
-  Re_c = 1,000,000", *International Journal of Heat and Fluid Flow* 72, 2018.
+  Re_c = 1,000,000", *International Journal of Heat and Fluid Flow* 72, 2018,
+  https://doi.org/10.1016/j.ijheatfluidflow.2018.04.017 (the LES data used
+  for validation: NACA 4412 at 5°).
+- I. B. Celik, U. Ghia, P. J. Roache, C. J. Freitas, H. Coleman and P. E. Raad,
+  "Procedure for estimation and reporting of uncertainty due to discretization
+  in CFD applications", *Journal of Fluids Engineering* 130(7), 078001, 2008
+  (the grid convergence index used in round 3).
 
 Airfoil coordinates come from the UIUC Airfoil Coordinates Database
 (https://m-selig.ae.illinois.edu/ads/coord_database.html).

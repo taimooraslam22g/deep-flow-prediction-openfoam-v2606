@@ -15,6 +15,14 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
+// Ground-effect case: same schemes as the original, except for the convection of
+// nuTilda, which groundGen.py fills in (GRAD_NUTILDA, DIV_NUTILDA; --nutilda-scheme):
+//   linearUpwind  : the original. With a realistic (low) incoming nuTilda it
+//                   undershoots below zero at the edge of the boundary layer, and
+//                   OpenFOAM clips nuTilda in almost every iteration.
+//   cellLimited   : the same scheme with a limited gradient (default)
+//   limitedLinear : a TVD scheme
+
 ddtSchemes
 {
     default         steadyState;
@@ -23,13 +31,14 @@ ddtSchemes
 gradSchemes
 {
     default         Gauss linear;
+    @GRAD_NUTILDA@
 }
 
 divSchemes
 {
     default         none;
     div(phi,U)      bounded Gauss linearUpwind grad(U);
-    div(phi,nuTilda) bounded Gauss linearUpwind grad(nuTilda);
+    div(phi,nuTilda) @DIV_NUTILDA@;
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }
 

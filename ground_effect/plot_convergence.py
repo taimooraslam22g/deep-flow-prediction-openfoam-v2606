@@ -62,7 +62,8 @@ def main():
     axes[2].set(xlabel="iteration", ylabel="Cd", title="Cd")
     for ax in axes:
         ax.grid(alpha=0.3)
-        ax.legend(fontsize=8)
+        if ax.get_legend_handles_labels()[0]:  # the Cd panel is empty for .npz-only input
+            ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(out, dpi=110)
     print("saved", out)
