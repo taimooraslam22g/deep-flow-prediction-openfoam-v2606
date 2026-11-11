@@ -20,7 +20,8 @@ Two files come out:
     (the largest at x/c 0.18, next to the suction peak). Here a quintic smoothing spline
     in arc length passes the table points within their rounding (four decimals), and is
     resampled with 200 points per surface, closely spaced near the leading and trailing
-    edges.
+    edges (smooth_airfoils.smooth). The dataset airfoils are smoothed in sqrt(x) instead
+    (smooth_airfoils.smooth_sqrt); for this table the two curves agree within 21 um.
 
 The table itself is not part of this repository. Put its 44 rows (columns: x/c suction,
 y/c suction, x/c pressure, y/c pressure; '#' lines are comments) in
@@ -28,9 +29,12 @@ data/airfoils/tyrrell026_table2.txt, then run (on Windows, with the project's Py
     .venv\\Scripts\\python.exe ground_effect\\make_tyrrell026.py
 """
 import os
+import sys
 
 import numpy as np
-from scipy.interpolate import splev, splprep
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from smooth_airfoils import smooth, write  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "data", "airfoils", "tyrrell026_table2.txt")
@@ -38,38 +42,7 @@ OUT = os.path.join(ROOT, "data", "airfoils", "tyrrell026.dat")
 OUT_RAW = os.path.join(ROOT, "data", "airfoils", "tyrrell026_raw.dat")
 TITLE = "TYRRELL 026 FRONT WING MAIN ELEMENT (ZERIHAN 2001, TABLE 2), ZERO INCIDENCE"
 CHORD_MM = 223.4  # the wind tunnel model
-POINTS_PER_SIDE = 200
-# The table gives four decimals: each number is off by up to 0.00005, a standard deviation
-# of 0.00005 / sqrt(3) in x and in y. The smoothing spline may stay away from the points by
-# that much on average, and no more (the usual choice, Reinsch 1967).
-ROUNDING = 0.5e-4 / np.sqrt(3)
-
-
-def write(path, ar, title):
-    with open(path, "w") as f:
-        f.write(title + "\n")
-        for x, y in ar:
-            f.write(f"{x:10.6f} {y:10.6f}\n")
-
-
-def smooth(ar, n=POINTS_PER_SIDE):
-    """Quintic smoothing spline in arc length through the points (UIUC order), resampled
-    with n points per surface. The spacing follows a cosine from the trailing edge to the
-    leading edge and back, so it changes smoothly everywhere. Returns the new points and
-    the distance of each table point from the curve (in chords)."""
-    m = len(ar)
-    u = np.concatenate([[0], np.cumsum(np.hypot(*np.diff(ar, axis=0).T))])
-    u /= u[-1]
-    w = np.ones(m)
-    w[[0, -1]] = 100  # keep the two trailing-edge corners in place
-    tck, _ = splprep([ar[:, 0], ar[:, 1]], u=u, w=w, k=5, s=m * 2 * ROUNDING ** 2)
-    u_le = u[np.argmin(ar[:, 0])]
-    b = np.linspace(0, np.pi, n)
-    uu = np.concatenate([u_le * (1 - np.cos(b)) / 2, u_le + (1 - u_le) * (1 - np.cos(b[1:])) / 2])
-    new = np.column_stack(splev(uu, tck))
-    dense = np.column_stack(splev(np.linspace(0, 1, 200001), tck))
-    dist = np.array([np.hypot(*(dense - p).T).min() for p in ar])
-    return new, dist
+TABLE_DECIMALS = 4  # each number of the table is off by up to 0.00005
 
 
 def main():
@@ -95,7 +68,7 @@ def main():
     up, lo = upright(suction), upright(pressure)
     ar = np.vstack([up[::-1], lo[1:]])  # TE -> upper -> LE -> lower -> TE (LE point once)
     write(OUT_RAW, ar, TITLE + ", TABLE POINTS")
-    new, dist = smooth(ar)
+    new, dist, _ = smooth(ar, TABLE_DECIMALS)
     write(OUT, new, TITLE + ", SMOOTHED")
 
     thick = np.interp(up[:, 0], lo[:, 0], lo[:, 1])
