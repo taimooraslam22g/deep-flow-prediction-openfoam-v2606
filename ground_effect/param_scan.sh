@@ -18,7 +18,7 @@
 # To run more samples later without repeating these, use another SEED and OUT, e.g.
 #     SEED=2000 OUT=data/param_scan2 bash param_scan.sh
 #
-# The scan of 2026-11-10/11 (README) drew the ride height uniformly and stopped every run
+# The parameter scan in the README drew the ride height uniformly and stopped every run
 # at 1000 iterations, before groundGen.py had --h-sampling and --max-iterations; SCAN_OPTS
 # keeps those settings, so the same seeds give the same runs. Its 'converged' column
 # still counted nuTilda clipped at the end against a run (param_scan_report.py reports
