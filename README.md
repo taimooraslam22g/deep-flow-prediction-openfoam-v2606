@@ -2,11 +2,46 @@
 
 A reproduction of **Thuerey et al., "Deep Learning Methods for Reynolds-Averaged
 Navier-Stokes Simulations of Airfoil Flows"** (*AIAA Journal*, 2020) on current
-software: OpenFOAM v2606, gmsh 4 and Docker on Windows. It is the first step
-towards an extension to **inverted airfoils in ground effect** (F1 front wings).
+software: OpenFOAM v2606, gmsh 4 and Docker on Windows (about 3% test error,
+as in the paper). It is extended here to **inverted airfoils in ground effect**
+(F1 front wings). The ground-effect simulations are checked against LES (skin
+friction within 6–7%), wind-tunnel tests of an F1 wing (downforce gain near the
+ground within 4%) and finer meshes (0.04–3%); the dataset is being generated
+now.
 
 - Paper: https://arxiv.org/abs/1810.08217
 - Original code: https://github.com/thunil/Deep-Flow-Prediction (Apache-2.0)
+
+<a id="words-used-here"></a>
+<details>
+<summary><b>Words used in this README</b> (click to open)</summary>
+
+| Word | Meaning |
+|---|---|
+| CFD | Computational fluid dynamics: computing airflow on a computer |
+| RANS | Reynolds-averaged Navier–Stokes: computing the average flow, with a turbulence model for the turbulent eddies |
+| OpenFOAM | The free CFD software used here (version v2606) |
+| Mesh, cells | The grid of small cells on which the flow is computed |
+| Boundary layer | The thin layer of slow air next to the wing's surface |
+| y+ | How thin the first cell at the wall is, in the boundary layer's own units. y+ ≈ 1 resolves the layer right down to the wall |
+| Spalart–Allmaras (SA) | The turbulence model used: one extra equation for the turbulent mixing |
+| nuTilda | The quantity that equation solves for. "Clipping" means OpenFOAM resets values that come out negative |
+| Iterations, converged | The solver improves its answer step by step (iterations); a run has converged when the answer stops changing |
+| GCI | Grid convergence index: how much a result could still change on an infinitely fine mesh |
+| LES | Large-eddy simulation: a far more detailed and costly simulation, used here as the reference |
+| Chord (c) | The length of the airfoil from front to back |
+| Ride height (h/c) | The gap between the wing's lowest point and the ground, divided by the chord |
+| Angle of attack (α) | How far the wing is tilted against the oncoming air |
+| Cl, Cd | Downforce (lift) and drag, divided by ½ × air density × speed² × chord, so that cases can be compared. Negative Cl means downforce |
+| Reynolds number (Re) | Speed × chord ÷ the air's viscosity; here 1–5 million |
+| Ground effect | The extra downforce a wing makes close to the ground |
+| Moving ground | The ground moves at the air's speed, as the road does under a car |
+| Separation | Where the air stops following the wing's surface; behind it the flow turns back and becomes unsteady |
+| Sample | One simulation, stored as six 128 × 128 images: 3 inputs (the air's speed, and where the wing and the ground are) and 3 outputs (pressure and the two velocity components) |
+| U-Net | The type of neural network used: it turns input images into output images |
+| Surrogate | A fast model that replaces the slow simulation |
+
+</details>
 
 ---
 
@@ -20,7 +55,7 @@ towards an extension to **inverted airfoils in ground effect** (F1 front wings).
 | 4. Download the authors' precomputed dataset | Done (`data_6k`: 6,400 train / 90 test, SHA-512 verified) |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare my results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress: setup validated against LES (surface pressure and skin friction close to the LES), mesh chosen (boundary layer with y+ ≈ 1, 20-chord domain), numerical verification done (downforce mesh-converged within 0.04%, sampled flow field within 0.2%; runs without a steady solution are detected and kept out of the data), a sample now takes about 3 minutes. Validated in ground effect against wind tunnel tests (Tyrrell 026 wing, Zerihan 2001; 33 runs on three meshes): downforce within 1.5% of Zerihan's own 2D RANS from h/c 0.671 down to 0.224, largest downforce at the same height, numerical uncertainty 0.04–1.8% down to h/c 0.134. Like his, our values are 14–19% above the tunnel's estimate, and the sparse tappings explain only 1% of that. Airfoil files smoothed for the dataset: 1,462 of the 1,497 UIUC files kept, 15 times closer to known shapes than gmsh's spline through the original points. Parameter scan (200 random runs): 76% have a steady Cl after 1000 iterations and 14% are still settling; the earlier convergence test would have kept only 52%, because it rejected runs in which a few wake cells keep being clipped, which changes nothing that matters (tested). Next: the dataset. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them). Now: making the dataset, then training. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ### Log
 - **2026-11-07**: Set up the Docker environment. Found and fixed four
