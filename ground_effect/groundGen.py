@@ -12,9 +12,12 @@ What is different from the original:
     leave old results behind that get saved by mistake
   * the lift (downforce) and drag coefficients (averaged over the last 100 iterations),
     the residuals and the surface pressure / wall shear stress are saved too
-  * every run is checked for convergence. Runs that do not settle to a steady flow (Cl
-    still changing, or nuTilda still clipped at the end) are saved in not_converged/,
-    so they cannot end up in the training data by mistake
+  * every run is checked for convergence. A run whose Cl is still settling after
+    --iterations continues, up to --max-iterations. Runs whose Cl does not become steady
+    (separated, unsteady flow) are saved in not_converged/, so they cannot end up in the
+    training data by mistake. How much nuTilda OpenFOAM had to clip is recorded too
+  * the ride height is drawn log-uniformly (as many cases between h/c 0.05 and 0.1 as
+    between 0.3 and 0.6), because the flow changes fastest close to the ground
   * --free-air removes the ground (for validation against free-flight reference data)
   * a boundary-layer mesh (thin cells along the airfoil, first cell at y+ of about 1,
     steady cell growth away from it) in a 20-chord domain; --refine makes every cell
@@ -27,9 +30,10 @@ What is different from the original:
 
 Defaults are the settings chosen by the validation and the mesh study (see README):
 incoming nuTilda = 3e-5 (3 x nu) with a limited gradient for its convection, SIMPLEC,
-1000 iterations, boundary-layer mesh, 20-chord domain. The original dataset used
---nutilda 0.14 --nutilda-scheme linearUpwind --solver simple --iterations 500 --no-bl
---domain 5 --sampling cloud.
+1000 iterations (up to 3000 while Cl is still settling), boundary-layer mesh, 20-chord
+domain. The original dataset used --nutilda 0.14 --nutilda-scheme linearUpwind
+--solver simple --iterations 500 --max-iterations 500 --no-bl --domain 5 --sampling cloud
+(and had no ground; the ride height was not drawn).
 
 Each sample is saved in the same 6 x 128 x 128 layout as the original dataset, so the same
 U-Net code can train on it. The ground appears in the mask channel (2), like the airfoil.
@@ -54,23 +58,36 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Ranges for random samples. These are a first guess; the final ranges get decided
-# after the validation runs.
+# Ranges for random samples (kept after the parameter scan, see README). The angle of
+# attack and the air speed are drawn uniformly; the ride height log-uniformly by default
+# (--h-sampling), like the heights of the wind-tunnel tests (Zerihan, 2001).
 ALPHA_RANGE = (0.0, 10.0)   # angle of attack, degrees
 H_RANGE = (0.05, 0.6)       # ride height as a fraction of the chord
-U_RANGE = (10.0, 50.0)      # air speed, m/s
+U_RANGE = (10.0, 50.0)      # air speed, m/s (chord Reynolds number 1-5 million)
 
 RES = 128  # output grid: RES x RES points over x in [-0.5, 1.5], y in [-1, 1]
 
-# Convergence checks (mesh study, round 3). The drag flips between two values from one
-# iteration to the next (by up to 2% on coarse meshes), so Cl and Cd are averaged over
-# the last AVERAGE iterations. A run counts as converged if Cl varies by less than
-# STEADY_TOL over the last STEADY_WINDOW iterations (steady runs: below 0.03% after
-# 1000 iterations; runs with an unsteady, separated flow: 0.6-12%) and nuTilda is no
-# longer clipped at the end.
+# Convergence checks (mesh study, round 3; parameter scan). The drag flips between two
+# values from one iteration to the next (by up to 2% on coarse meshes), so Cl and Cd are
+# averaged over the last AVERAGE iterations. A run counts as converged if Cl varies by
+# less than STEADY_TOL over the last STEADY_WINDOW iterations (steady runs: below 0.03%
+# after 1000 iterations; runs with an unsteady, separated flow: 0.6-12%).
+# In the parameter scan, the Cl of some runs still changed after 1000 iterations but
+# settled steadily, its range shrinking 2-5 times every 200 iterations; others
+# oscillated without settling. A run whose Cl range over the last STEADY_WINDOW
+# iterations is below SETTLING times the range over the window before therefore
+# continues, EXTEND iterations at a time, up to --max-iterations (clip_test.sh: of five
+# such runs, three converged by 2000 iterations, one was still settling at 2000, and one
+# stopped settling at 1500 just above the limit).
+# Whether nuTilda was still clipped at the end is recorded (clipped, clip_min), but no
+# longer counts against convergence: in the scan it was clipped in nearly every iteration
+# in 45% of the runs, also in runs with a steady Cl, in a few up to about a hundred cells
+# at the outer edge of the wake (README, parameter scan; clip_test.sh measures the effect).
 AVERAGE = 100
 STEADY_WINDOW = 200
 STEADY_TOL = 0.001
+SETTLING = 0.7
+EXTEND = 500
 
 # Solver settings: (consistent, relaxation p, U, nuTilda)
 SOLVER = {"simple": ("no", 0.3, 0.7, 0.7),     # the original case
@@ -87,6 +104,9 @@ NUTILDA_SCHEMES = {
     "cellLimited": ("grad(nuTilda)   cellLimited Gauss linear 1;",
                     "bounded Gauss linearUpwind grad(nuTilda)"),
     "limitedLinear": ("", "bounded Gauss limitedLinear 1"),
+    # first order: cannot undershoot, so nothing to clip, but more numerical diffusion.
+    # Only to measure what the clipping changes (clip_test.sh)
+    "upwind": ("", "bounded Gauss upwind"),
 }
 
 # Boundary-layer mesh (--bl). The first cell is thin enough to put its centre at y+ of
@@ -514,24 +534,36 @@ def to_grid(samples, U):
 
 
 def read_coeffs(case):
-    """Cl and Cd for every iteration, from the forceCoeffs output."""
-    files = [p for p in glob.glob(os.path.join(case, "postProcessing", "forceCoeffs1", "*", "*.dat"))
-             if "oeff" in os.path.basename(p)]
-    if not files:
+    """Cl and Cd for every iteration, from the forceCoeffs output. A run that was continued
+    (see continue_run) has one folder per start time (0, 1000, 1500, ...): they are joined
+    in order of time."""
+    base = os.path.join(case, "postProcessing", "forceCoeffs1")
+    starts = sorted((d for d in glob.glob(os.path.join(base, "*")) if is_number(os.path.basename(d))),
+                    key=lambda d: float(os.path.basename(d)))
+    cl, cd, last = [], [], -np.inf
+    for folder in starts:
+        files = sorted(p for p in glob.glob(os.path.join(folder, "*.dat")) if "oeff" in os.path.basename(p))
+        if not files:
+            continue
+        header, rows = None, []
+        with open(files[-1]) as f:
+            for line in f:
+                if line.startswith("#"):
+                    words = line[1:].split()
+                    if words and words[0] == "Time":
+                        header = words
+                elif line.strip():
+                    rows.append([float(v) for v in line.split()])
+        if header is None or not rows or "Cl" not in header or "Cd" not in header:
+            return None
+        data = np.array(rows)
+        new = data[:, 0] > last  # a time that is already there (should not happen) is kept once
+        cl.extend(data[new, header.index("Cl")])
+        cd.extend(data[new, header.index("Cd")])
+        last = max(last, data[:, 0].max())
+    if not cl:
         return None
-    header, rows = None, []
-    with open(sorted(files)[-1]) as f:
-        for line in f:
-            if line.startswith("#"):
-                words = line[1:].split()
-                if words and words[0] == "Time":
-                    header = words
-            elif line.strip():
-                rows.append([float(v) for v in line.split()])
-    if header is None or not rows or "Cl" not in header or "Cd" not in header:
-        return None
-    data = np.array(rows)
-    return data[:, header.index("Cl")], data[:, header.index("Cd")]
+    return np.array(cl), np.array(cd)
 
 
 def rel_range(a, floor):
@@ -617,18 +649,57 @@ def final_residuals(log):
     return res
 
 
+def clipping(logs):
+    """From the simpleFoam logs of a run (several if it was continued): in how many
+    iterations OpenFOAM had to clip negative nuTilda values, the last iteration in which
+    it did, and the most negative value it clipped in the last AVERAGE iterations (0 if
+    none). Clipping in the first few hundred iterations, while the flow develops, is
+    common. In some runs it goes on in nearly every iteration until the end: then a few
+    cells at the outer edge of the wake go negative again in every iteration."""
+    count, last, it, lows = 0, 0, 0, {}
+    for log in logs:
+        with open(log) as f:
+            for line in f:
+                if line.startswith("Time = "):
+                    it = int(float(line.split("=")[1]))
+                elif line.startswith("bounding nuTilda"):
+                    count, last = count + 1, it
+                    m = re.search(r"min: ([-+0-9.eE]+)", line)
+                    if m:
+                        lows[it] = float(m.group(1))
+    recent = [v for k, v in lows.items() if k > it - AVERAGE]
+    return count, last, min(recent) if recent else 0.0
+
+
 def bounded_iterations(log):
-    """In how many iterations OpenFOAM had to clip negative nuTilda values, and the last
-    iteration in which it did. Some clipping at the start is harmless; clipping that goes
-    on until the end stops the residual from converging."""
-    count, last, it = 0, 0, 0
-    with open(log) as f:
-        for line in f:
-            if line.startswith("Time = "):
-                it = int(float(line.split("=")[1]))
-            elif line.startswith("bounding nuTilda"):
-                count, last = count + 1, it
-    return count, last
+    """Iterations with clipping and the last of them, for one log (verification_report.py)."""
+    return clipping([log])[:2]
+
+
+def settling(cl):
+    """True if Cl is not steady yet but settling: its range over the last STEADY_WINDOW
+    iterations is at least STEADY_TOL, and below SETTLING times its range over the
+    STEADY_WINDOW iterations before (same measure as cl_range in force_summary)."""
+    if len(cl) < 2 * STEADY_WINDOW:
+        return False
+    now = rel_range(cl[-STEADY_WINDOW:], 0.05)
+    before = rel_range(cl[-2 * STEADY_WINDOW:-STEADY_WINDOW], 0.05)
+    return STEADY_TOL <= now < SETTLING * before
+
+
+def continue_run(case, end, step):
+    """Prepare the case to continue from the last written time (controlDict starts from
+    the latest time) to iteration `end`, writing every `step` iterations, so that the
+    new end is written and the sampling and surface data are made there."""
+    path = os.path.join(case, "system", "controlDict")
+    with open(path) as f:
+        text = f.read()
+    text, n1 = re.subn(r"^(endTime\s+)\S+;", rf"\g<1>{end};", text, flags=re.M)
+    text, n2 = re.subn(r"^(writeInterval\s+)\S+;", rf"\g<1>{step};", text, flags=re.M)
+    if n1 != 1 or n2 != 1:
+        raise RuntimeError(f"could not set endTime/writeInterval in {path}")
+    with open(path, "w") as f:
+        f.write(text)
 
 
 def last_iteration(log):
@@ -653,7 +724,15 @@ def tail(path, n=15):
 
 CSV_HEADER = ("file,airfoil,alpha_deg,h_over_c,U,Cl,Cd,cl_range,cd_oscillation,converged,reversed_flow,"
               "max_residual,iterations,cells,seconds,startup_seconds,solver,nutilda,bl,domain,refine,"
-              "nutilda_scheme,sampling,bounded,last_bounded\n")
+              "nutilda_scheme,sampling,bounded,last_bounded,clipped,clip_min\n")
+
+
+def draw_h(u, sampling):
+    """Ride height from a uniform draw u in H_RANGE: unchanged ('uniform') or mapped to a
+    log-uniform value ('log'). The same seed then gives the same airfoils, angles and
+    speeds with either kind of sampling."""
+    lo, hi = H_RANGE
+    return u if sampling == "uniform" else lo * (hi / lo) ** ((u - lo) / (hi - lo))
 
 
 def main():
@@ -677,7 +756,12 @@ def main():
                    help="make every cell this many times smaller (grid convergence study; default 1)")
     p.add_argument("--solver", choices=sorted(SOLVER), default="simplec",
                    help="simplec (default) or simple (the original settings)")
-    p.add_argument("--iterations", type=int, default=1000, help="maximum solver iterations (default 1000)")
+    p.add_argument("--iterations", type=int, default=1000, help="solver iterations (default 1000)")
+    p.add_argument("--max-iterations", type=int, default=3000,
+                   help=f"continue a run whose Cl is still settling after --iterations, {EXTEND} iterations "
+                        "at a time, up to this many (default 3000; the same as --iterations: never)")
+    p.add_argument("--h-sampling", choices=["log", "uniform"], default="log",
+                   help="draw random ride heights log-uniformly (default) or uniformly (as in the parameter scan)")
     p.add_argument("--nutilda", type=float, default=3e-5,
                    help="incoming turbulent viscosity (default 3e-5 = 3 nu; the original dataset used 0.14)")
     p.add_argument("--nutilda-scheme", choices=list(NUTILDA_SCHEMES), default="cellLimited",
@@ -688,11 +772,16 @@ def main():
     p.add_argument("--mesh-only", action="store_true", help="only make and check the mesh, do not solve")
     p.add_argument("--seed", type=int, help="random seed (default: random)")
     p.add_argument("--airfoil-dir",
-                   default=os.path.join(HERE, "..", "Deep-Flow-Prediction", "data", "airfoil_database"))
+                   default=os.path.join(HERE, "..", "Deep-Flow-Prediction", "data", "airfoil_database"),
+                   help="folder of airfoil files to draw from (default: the UIUC files as they are; the dataset "
+                        "uses the smoothed files from smooth_airfoils.py, /work/data/airfoil_database_smooth)")
     p.add_argument("--out", default=os.path.join(HERE, "data", "train"), help="where to save the samples")
     p.add_argument("--worker", type=int, default=0,
                    help="run in work/worker<N>; give each copy a different number to run several at once")
     args = p.parse_args()
+    if args.max_iterations > args.iterations and (args.iterations % EXTEND or args.max_iterations % EXTEND):
+        # continue_run writes every EXTEND iterations: the ends must fall on those
+        p.error(f"--iterations and --max-iterations must be multiples of {EXTEND} when runs may be continued")
 
     seed = args.seed if args.seed is not None else int(np.random.randint(0, 2**31 - 1))
     rng = np.random.default_rng(seed)
@@ -714,7 +803,7 @@ def main():
     for n in range(args.samples):
         # draw all random values every time, so a given seed always gives the same cases
         r_airfoil, r_alpha = files[rng.integers(len(files))], rng.uniform(*ALPHA_RANGE)
-        r_h, r_U = rng.uniform(*H_RANGE), rng.uniform(*U_RANGE)
+        r_h, r_U = draw_h(rng.uniform(*H_RANGE), args.h_sampling), rng.uniform(*U_RANGE)
         airfoil = args.airfoil or r_airfoil
         alpha = args.alpha if args.alpha is not None else r_alpha
         h = np.inf if args.free_air else (args.h if args.h is not None else r_h)
@@ -767,14 +856,38 @@ def main():
             continue
         print("    solving (this takes a few minutes)...")
 
-        log = os.path.join(case, "log.simpleFoam")
+        logs = [os.path.join(case, "log.simpleFoam")]
         if run("simpleFoam", case, "log.simpleFoam") != 0:
-            print(f"    simpleFoam failed, skipping. End of the log:\n{tail(log)}")
+            print(f"    simpleFoam failed, skipping. End of the log:\n{tail(logs[0])}")
             continue
+        # Cl not steady yet but settling? Then continue, EXTEND iterations at a time, up
+        # to --max-iterations (not if the solver already stopped on its residuals)
+        end, failed = args.iterations, False
+        while end < args.max_iterations and last_iteration(logs[-1]) == end:
+            coeffs = read_coeffs(case)
+            if coeffs is None or not settling(coeffs[0]):
+                break
+            new_end = min(end + EXTEND, args.max_iterations)
+            print(f"    Cl still settling after {end} iterations (varies by "
+                  f"{100 * rel_range(coeffs[0][-STEADY_WINDOW:], 0.05):.2f}%): continuing to {new_end}")
+            continue_run(case, new_end, new_end - end)
+            end = new_end
+            logs.append(os.path.join(case, f"log.simpleFoam.{end}"))
+            if run("simpleFoam", case, os.path.basename(logs[-1])) != 0:
+                print(f"    simpleFoam failed, skipping. End of the log:\n{tail(logs[-1])}")
+                failed = True
+                break
+        if failed:
+            continue
+        iters = last_iteration(logs[-1])
 
         folder = latest_time_dir(os.path.join(case, "postProcessing", "internalCloud"))
         if folder is None:
             samples = np.zeros((0, 7))
+        elif float(os.path.basename(folder)) != iters:  # never save the flow of an earlier iteration
+            print(f"    the flow was sampled at iteration {os.path.basename(folder)}, not at the last "
+                  f"iteration {iters}, skipping")
+            continue
         elif args.sampling == "lines":
             samples = read_rows(folder)[0]
         else:
@@ -782,7 +895,7 @@ def main():
             samples = np.loadtxt(cloud, ndmin=2) if os.path.exists(cloud) else np.zeros((0, 7))
         if len(samples) < RES * RES // 4:  # at most about half the grid is airfoil or ground
             print(f"    only {len(samples)} of the {RES * RES} grid points were sampled, skipping. "
-                  f"End of the log:\n{tail(log)}")
+                  f"End of the log:\n{tail(logs[-1])}")
             continue
         grid = to_grid(samples, U)
 
@@ -796,14 +909,13 @@ def main():
         if "surf_p" not in surface or "surf_tau" not in surface:
             print("    warning: no surface pressure / wall shear stress found")
         rev = reversed_flow(surface, alpha)
-        res = final_residuals(log)
+        res = final_residuals(logs[-1])
         max_res = max(res.values()) if res else float("nan")
-        iters = last_iteration(log)
-        bounded, last_bounded = bounded_iterations(log)
-        clipped_at_end = bounded > 0 and last_bounded > 0.9 * iters
-        converged = bool(cl_range < STEADY_TOL and not clipped_at_end)  # False if Cl is missing
+        bounded, last_bounded, clip_min = clipping(logs)
+        clipped = bounded > 0 and last_bounded > iters - AVERAGE  # still clipped at the end
+        converged = bool(cl_range < STEADY_TOL)  # False if Cl is missing
         cells = cell_count(case)
-        startup = startup_seconds(log)
+        startup = startup_seconds(logs[0])
         seconds = time.time() - start
 
         tag = "free" if args.free_air else f"h{round(h * 1000):04d}"
@@ -820,7 +932,8 @@ def main():
                             iterations=iters, nutilda=args.nutilda, solver=args.solver,
                             bl=args.bl, domain=args.domain, refine=args.refine,
                             nutilda_scheme=args.nutilda_scheme, sampling=args.sampling,
-                            bounded=bounded, last_bounded=last_bounded, cells=cells,
+                            bounded=bounded, last_bounded=last_bounded, clipped=clipped,
+                            clip_min=clip_min, max_iterations=args.max_iterations, cells=cells,
                             seconds=seconds, startup_seconds=startup,
                             mesh_ok=ok, bl_first=bl_layers(U, args.refine)[0] if args.bl else np.nan,
                             Cl_history=coeffs[0] if coeffs else np.array([]),
@@ -833,7 +946,8 @@ def main():
                     f"{U:.3f},{cl:.5f},{cd:.5f},{cl_range:.6f},{cd_osc:.5f},{int(converged)},{rev:.4f},"
                     f"{max_res:.3e},{iters},{cells},{seconds:.0f},{startup:.0f},"
                     f"{args.solver},{args.nutilda:g},{int(args.bl)},{args.domain:g},{args.refine:g},"
-                    f"{args.nutilda_scheme},{args.sampling},{bounded},{last_bounded}\n")
+                    f"{args.nutilda_scheme},{args.sampling},{bounded},{last_bounded},{int(clipped)},"
+                    f"{clip_min:.3e}\n")
 
         print(f"    done in {seconds:.0f} s after {iters} iterations "
               f"(the first iteration ended after {startup:.0f} s)")
@@ -842,16 +956,16 @@ def main():
         print("    final residuals: " + ", ".join(f"{k} {v:.1e}" for k, v in res.items()))
         print(f"    nuTilda clipped below zero in {bounded} of {iters} iterations"
               + (f" (last in iteration {last_bounded})" if bounded else "")
-              + ("  <- still at the end" if clipped_at_end else ""))
+              + (f"  <- still at the end, down to {clip_min:.1e} ({clip_min / args.nutilda:.0f} x the "
+                 f"incoming value) in the last {AVERAGE} iterations" if clipped else ""))
         print(f"    Cl varies by {100 * cl_range:.3f}% over the last {STEADY_WINDOW} iterations; "
               f"Cd flips by +-{100 * cd_osc:.2f}% from one iteration to the next")
         print(f"    flow reversed (separated) on {100 * rev:.0f}% of the wing surface")
         if converged:
             print("    converged")
         else:
-            why = ([f"Cl still varies by {100 * cl_range:.2f}%"] if not cl_range < STEADY_TOL else []) \
-                + (["nuTilda still clipped at the end"] if clipped_at_end else [])
-            print(f"    NOT converged ({'; '.join(why)}): saved in not_converged/, not for training")
+            print(f"    NOT converged (Cl still varies by {100 * cl_range:.2f}%): saved in not_converged/, "
+                  "not for training")
         print(f"    saved {os.path.relpath(saved, HERE)}")
 
 
