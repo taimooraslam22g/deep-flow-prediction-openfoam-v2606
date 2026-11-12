@@ -4,13 +4,13 @@ A reproduction of **Thuerey et al., "Deep Learning Methods for Reynolds-Averaged
 Navier-Stokes Simulations of Airfoil Flows"** (*AIAA Journal*, 2020) on current
 software: OpenFOAM v2606, gmsh 4 and Docker on Windows (about 3% test error,
 as in the paper). It is extended here to **inverted airfoils in ground effect**
-(F1 front wings). The ground-effect simulations are checked against LES (skin
-friction within 6–7%), wind-tunnel tests of an F1 wing (downforce gain near the
-ground within 4%) and finer meshes (0.04–3%); the dataset is being generated
-now.
+(F1 front wings). The ground-effect simulations are checked against
+high-resolution LES (skin friction within 6–7%), wind-tunnel tests of an F1
+wing (downforce gain near the ground within 4%) and finer meshes (0.04–3%);
+the dataset is being generated now.
 
 **Main results:** [reproduction](#results) ·
-[comparison with the LES](#mesh-study-round-2) ·
+[comparison with high-resolution LES](#mesh-study-round-2) ·
 [comparison with the wind tunnel](#validation-in-ground-effect-the-tyrrell-026-wing) ·
 [mesh study](#mesh-study-round-3-numerical-verification) ·
 [airfoil shapes](#airfoil-shapes-for-the-dataset) ·
@@ -35,7 +35,7 @@ now.
 | nuTilda | The quantity that equation solves for. "Clipping" means OpenFOAM resets values that come out negative |
 | Iterations, converged | The solver improves its answer step by step (iterations); a run has converged when the answer stops changing |
 | GCI | Grid convergence index: how much a result could still change on an infinitely fine mesh |
-| LES | Large-eddy simulation: a far more detailed and costly simulation, used here as the reference |
+| LES | Large-eddy simulation: a far more detailed and costly simulation. Our reference is a high-resolution LES, close to DNS (direct numerical simulation, which computes all the turbulent eddies) |
 | Chord (c) | The length of the airfoil from front to back |
 | Ride height (h/c) | The gap between the wing's lowest point and the ground, divided by the chord |
 | Angle of attack (α) | How far the wing is tilted against the oncoming air |
@@ -62,7 +62,7 @@ now.
 | 4. Download the authors' precomputed dataset | Done: `data_6k` from the [TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791) (1.3 GB, 6,400 train / 90 test, SHA-512 verified). The training code expects it in `Deep-Flow-Prediction/data/train` and `data/test` |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare our results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them). Now: making the dataset, then training. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against high-resolution LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them). Now: making the dataset; the training code is ready. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ---
 
@@ -241,18 +241,21 @@ The same case run with two levels of incoming turbulence, up to 3000 iterations:
   (nuTilda = 0.14 m²/s) is 14,000 times the molecular viscosity (ν = 1e-5 m²/s).
   The usual recommendation for this model is 3–5 ν (Spalart & Rumsey, 2007).
   Switching changes the downforce by 9% and halves the drag. We are checking
-  which setting is closer to reality against high-fidelity LES data for a
+  which setting is closer to reality against high-resolution LES data for a
   NACA 4412 in free air (Vinuesa et al., 2018), using `groundGen.py --free-air`
   and `validate_les.py` (see below).
 
-### Validation against LES: NACA 4412 in free air, Re = 1M
+### Validation against high-resolution LES: NACA 4412 in free air, Re = 1M
 
-Before generating data, the CFD setup is checked against well-resolved LES of
-a NACA 4412 at 5° and Re_c = 1,000,000 (Vinuesa et al., 2018). The comparison
-uses the surface pressure Cp and skin friction Cf along the wing, between 15%
-and 98% of the chord, where the LES data is. The RANS runs use the same mesh and
-solver as the ground-effect runs, but with no ground (`groundGen.py --free-air`).
-Our 10 m/s, 1 m chord and ν = 1e-5 m²/s give exactly Re = 1M.
+Before generating data, the CFD setup is checked against high-resolution LES
+of a NACA 4412 at 5° and Re_c = 1,000,000 (Vinuesa et al., 2018), resolved so
+finely that it is close to DNS (direct numerical simulation). R. Vinuesa
+kindly provided the data files and allowed us to show this comparison; the
+files are not part of this repository. The comparison uses the surface
+pressure Cp and skin friction Cf along the wing, between 15% and 98% of the
+chord, where the LES data is. The RANS runs use the same mesh and solver as
+the ground-effect runs, but with no ground (`groundGen.py --free-air`). Our
+10 m/s, 1 m chord and ν = 1e-5 m²/s give exactly Re = 1M.
 
 | Incoming nuTilda | Cl | Cd | Mean \|ΔCp\| suction side | Mean \|ΔCp\| pressure side | Mean \|ΔCf\| suction side | Mean \|ΔCf\| pressure side |
 |---|---|---|---|---|---|---|
@@ -1231,12 +1234,43 @@ Share of the scan's runs by ride height:
 | 0.222–0.365 | 57 | 61% | 88% | 96% |
 | 0.365–0.6 | 77 | 64% | 87% | 94% |
 
-**Next:** generate the dataset with `dataset.sh` (1000 runs, about 21–22
-hours), and a test set from the 30 test airfoils. Then train the U-Net on it.
-Running 8 at a time instead of 4 does not help on this laptop (Ryzen 7 7730U,
-8 cores): each run then takes twice as long (9.4 instead of 4.7 minutes for
-1000 iterations, with the same mesh sizes), so the laptop finishes the same
-number of runs per hour.
+**The dataset** is made by `dataset.sh`: 1000 runs (about 21–22 hours), and a
+test set from the 30 test airfoils. Running 8 at a time instead of 4 does not
+help on this laptop (Ryzen 7 7730U, 8 cores): each run then takes twice as
+long (9.4 instead of 4.7 minutes for 1000 iterations, with the same mesh
+sizes), so the laptop finishes the same number of runs per hour.
+
+### Training the U-Net on the ground-effect data
+
+We train the same network as in the reproduction, with the same loss,
+optimiser, batch size, learning-rate schedule and error measure as
+[Run 3](#run-3-same-setup-80k-iterations-papers-training-length). The code is
+copied into `ground_effect/` (`unet.py`, `unet_data.py`, `train_unet.py`), so
+that it runs on a rented GPU with only this folder. As a check, the copied
+code gives the 80k-iteration model of Run 3 exactly the same errors on the
+original test set (p 14.86%, v 2.45%, combined 2.96%).
+
+Two things are new for the ground:
+- **Pressure offset.** The original code subtracts the mean pressure over all
+  128 × 128 points. That includes the masked points, where p = 0. An airfoil
+  alone masks only 1–3% of the points, but the ground masks 16–47%, so we
+  take the mean over the air only. On the original test set this changes the
+  errors of the Run 3 model very little (p 14.86 → 14.75%, combined 2.96%).
+- **Validation samples** (about 10%) are chosen by a checksum of the file
+  name, so they stay the same when more data is added.
+
+**The free-air model does not work near the ground.** Used as it is on the
+first 516 ground-effect samples, the Run 3 model has a combined error of 24.6%
+(pressure 180%, velocity 18.9%), against 2.96% in free air. The error grows
+closer to the ground: 28% for h/c 0.05–0.08, 21% for h/c 0.37–0.6.
+
+**Next: the learning curve** (`learning_curve.py`). We train models on 12.5,
+25, 50 and 100% of the training samples, each from random weights and from
+the free-air model (transfer learning), with 2 seeds, and test them all on the
+30 test airfoils, which are not in the training data. This shows whether more
+simulations are worth running, and how much the free-air model helps. It is
+16 runs of 80,000 iterations, so it runs on a GPU (see
+[How to run it](#how-to-run-it)).
 
 ---
 
@@ -1345,6 +1379,34 @@ OUT=data/dataset/test AIRFOILS=../data/airfoil_database_test_smooth RUNS=120 SEE
 ```
 The last line reports on the dataset the same way as on the scan.
 
+Training the U-Net on the ground-effect samples (`--help` lists all options).
+A short check on the laptop's CPU:
+```powershell
+cd ground_effect
+..\.venv\Scripts\python.exe train_unet.py --data data\dataset\train --fraction 0.1 --iterations 100 --threads 2 --out data\unet\check
+```
+The learning curve needs a GPU, for example a Kaggle notebook:
+1. Make a private Kaggle dataset with the folders `train` and `test` (from
+   `ground_effect/data/dataset/`) and the file `long80k_modelG` (the Run 3
+   model, from `Deep-Flow-Prediction/train/`).
+2. Make a notebook, add that dataset, choose a GPU and turn on internet
+   access, then run:
+   ```python
+   !git clone https://github.com/taimooraslam22g/deep-flow-prediction-openfoam-v2606.git
+   %cd deep-flow-prediction-openfoam-v2606/ground_effect
+   import glob, os
+   model = glob.glob("/kaggle/input/**/long80k_modelG", recursive=True)[0]
+   data = os.path.dirname(model)
+   !python learning_curve.py --data {data}/train --test {data}/test --pretrained {model} --out /kaggle/working/learning_curve --plot /kaggle/working/learning_curve.png
+   ```
+3. Download `learning_curve` from the notebook's output into
+   `ground_effect/data/unet/`, then on Windows:
+   ```powershell
+   .venv\Scripts\python.exe ground_effect\learning_curve.py --out ground_effect\data\unet\learning_curve --report-only --plot results\learning_curve.png
+   ```
+If the notebook stops before the end, run the same command again: finished
+runs are skipped.
+
 The Windows scripts (training, `make_tyrrell026.py` and the airfoil scripts)
 run in a local Python environment, `.venv`: Python 3.14 with numpy 2.5,
 scipy 1.18, matplotlib 3.11 and PyTorch 2.15 (CPU).
@@ -1388,6 +1450,10 @@ ground_effect/clip_test.sh        what the nuTilda clipping changes, and whether
 ground_effect/clip_test_report.py tables and figure of that test
 ground_effect/clip_cells.py       finds the cells where OpenFOAM clipped nuTilda in a finished run
 ground_effect/dataset.sh          makes the dataset with several runs at a time (inside the container)
+ground_effect/unet.py             the U-Net of the original code (copied from DfpNet.py, unchanged)
+ground_effect/unet_data.py        loads and normalises the ground-effect samples; the original error measure
+ground_effect/train_unet.py       trains one U-Net (from random weights or from the free-air model) and tests it
+ground_effect/learning_curve.py   trains and tests U-Nets on parts of the data, then the table and figure
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```
@@ -1413,8 +1479,8 @@ Other references used in the extension:
   models in aerodynamic calculations", *AIAA Journal* 45(10), 2007.
 - R. Vinuesa et al., "Turbulent boundary layers around wing sections up to
   Re_c = 1,000,000", *International Journal of Heat and Fluid Flow* 72, 2018,
-  https://doi.org/10.1016/j.ijheatfluidflow.2018.04.017 (the LES data used
-  for validation: NACA 4412 at 5°).
+  https://doi.org/10.1016/j.ijheatfluidflow.2018.04.017 (the high-resolution
+  LES data used for validation: NACA 4412 at 5°, provided by R. Vinuesa).
 - I. B. Celik, U. Ghia, P. J. Roache, C. J. Freitas, H. Coleman and P. E. Raad,
   "Procedure for estimation and reporting of uncertainty due to discretization
   in CFD applications", *Journal of Fluids Engineering* 130(7), 078001, 2008

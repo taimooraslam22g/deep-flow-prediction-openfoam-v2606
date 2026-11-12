@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below, together with the original paper by Thuerey et al. (2020)."
+title: "Deep Flow Prediction on OpenFOAM v2606, extended to inverted airfoils in ground effect"
+type: software
+authors:
+  - given-names: "Muhammad Taimoor Aslam"
+    family-names: "Sial"
+    orcid: "https://orcid.org/0009-0007-2268-1977"
+repository-code: "https://github.com/taimooraslam22g/deep-flow-prediction-openfoam-v2606"
+license: Apache-2.0
+abstract: >-
+  A reproduction of the U-Net of Thuerey et al. (AIAA Journal, 2020), which predicts
+  RANS flow fields (pressure and velocity) around airfoils, on OpenFOAM v2606, gmsh 4
+  and Docker, extended to inverted airfoils in ground effect (F1 front wings). It
+  contains the ground-effect data generator (OpenFOAM, Spalart-Allmaras model, moving
+  ground, boundary-layer mesh), its verification and validation (high-resolution LES of
+  a NACA 4412, wind-tunnel tests of the Tyrrell 026 wing, grid convergence), the
+  smoothing of 1,462 UIUC airfoils, a parameter scan of where steady RANS converges in
+  ground effect, and the code that trains and tests the U-Net on the ground-effect data.
+keywords:
+  - computational fluid dynamics
+  - RANS
+  - OpenFOAM
+  - deep learning
+  - U-Net
+  - surrogate model
+  - airfoil
+  - ground effect
+  - Formula 1
+references:
+  - type: article
+    title: "Deep Learning Methods for Reynolds-Averaged Navier-Stokes Simulations of Airfoil Flows"
+    authors:
+      - given-names: "Nils"
+        family-names: "Thuerey"
+      - given-names: "Konstantin"
+        family-names: "Weißenow"
+      - given-names: "Lukas"
+        family-names: "Prantl"
+      - given-names: "Xiangyu"
+        family-names: "Hu"
+    journal: "AIAA Journal"
+    volume: 58
+    issue: "1"
+    start: 25
+    end: 36
+    year: 2020
+    doi: "10.2514/1.J058291"
