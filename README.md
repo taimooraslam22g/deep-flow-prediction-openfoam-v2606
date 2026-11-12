@@ -9,6 +9,13 @@ friction within 6–7%), wind-tunnel tests of an F1 wing (downforce gain near th
 ground within 4%) and finer meshes (0.04–3%); the dataset is being generated
 now.
 
+**Main results:** [reproduction](#results) ·
+[comparison with the LES](#mesh-study-round-2) ·
+[comparison with the wind tunnel](#validation-in-ground-effect-the-tyrrell-026-wing) ·
+[mesh study](#mesh-study-round-3-numerical-verification) ·
+[airfoil shapes](#airfoil-shapes-for-the-dataset) ·
+[parameter scan](#parameter-scan-where-does-steady-rans-converge)
+
 - Paper: https://arxiv.org/abs/1810.08217
 - Original code: https://github.com/thunil/Deep-Flow-Prediction (Apache-2.0)
 
