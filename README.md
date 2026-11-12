@@ -1,5 +1,7 @@
 # Deep Flow Prediction: Reproduction on OpenFOAM v2606
 
+[![DOI](https://zenodo.org/badge/1454795941.svg)](https://doi.org/10.5281/zenodo.24176980)
+
 A reproduction of **Thuerey et al., "Deep Learning Methods for Reynolds-Averaged
 Navier-Stokes Simulations of Airfoil Flows"** (*AIAA Journal*, 2020) on current
 software: OpenFOAM v2606, gmsh 4 and Docker on Windows (about 3% test error,
@@ -1385,20 +1387,25 @@ A short check on the laptop's CPU:
 cd ground_effect
 ..\.venv\Scripts\python.exe train_unet.py --data data\dataset\train --fraction 0.1 --iterations 100 --threads 2 --out data\unet\check
 ```
-The learning curve needs a GPU, for example a Kaggle notebook:
-1. Make a private Kaggle dataset with the folders `train` and `test` (from
-   `ground_effect/data/dataset/`) and the file `long80k_modelG` (the Run 3
-   model, from `Deep-Flow-Prediction/train/`).
-2. Make a notebook, add that dataset, choose a GPU and turn on internet
-   access, then run:
+The learning curve needs a GPU, for example a Kaggle notebook. On a Tesla T4,
+one run of 80,000 iterations takes about 16 minutes (12 ms per iteration), so
+the 16 runs take about 2.5 hours on Kaggle's two T4s with `--gpus 2`:
+1. Make a private Kaggle dataset from a zip file with the folders `train` and
+   `test` (from `ground_effect/data/dataset/`) and the file `long80k_modelG`
+   (the Run 3 model, from `Deep-Flow-Prediction/train/`).
+2. Make a notebook with that dataset, choose the accelerator "GPU T4 x2" and
+   turn on internet access. Put this in a cell:
    ```python
    !git clone https://github.com/taimooraslam22g/deep-flow-prediction-openfoam-v2606.git
    %cd deep-flow-prediction-openfoam-v2606/ground_effect
    import glob, os
    model = glob.glob("/kaggle/input/**/long80k_modelG", recursive=True)[0]
    data = os.path.dirname(model)
-   !python learning_curve.py --data {data}/train --test {data}/test --pretrained {model} --out /kaggle/working/learning_curve --plot /kaggle/working/learning_curve.png
+   !python learning_curve.py --data {data}/train --test {data}/test --pretrained {model} --gpus 2 --out /kaggle/working/learning_curve --plot /kaggle/working/learning_curve.png
    ```
+   Then click "Save Version" and choose "Save & Run All (Commit)": the
+   notebook runs in the background (the browser can be closed) and its
+   output is kept.
 3. Download `learning_curve` from the notebook's output into
    `ground_effect/data/unet/`, then on Windows:
    ```powershell
@@ -1473,6 +1480,12 @@ Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
   year    = {2020}
 }
 ```
+
+To cite this repository: M. T. A. Sial, *Deep Flow Prediction on OpenFOAM
+v2606, extended to inverted airfoils in ground effect*, Zenodo,
+https://doi.org/10.5281/zenodo.24176980 (all versions; v0.1.0 is
+https://doi.org/10.5281/zenodo.24176981). GitHub's "Cite this repository"
+button gives the same in other formats.
 
 Other references used in the extension:
 - P. R. Spalart and C. L. Rumsey, "Effective inflow conditions for turbulence

@@ -10,7 +10,8 @@ summary.json are not repeated, so after an interruption the same command goes on
 stopped. At the end it writes <out>/learning_curve.csv (one line per run) and prints the table;
 --plot also draws the figure.
 
-On a GPU, from the ground_effect folder (see the README for Kaggle):
+On a GPU, from the ground_effect folder (see the README for Kaggle; with two GPUs, --gpus 2
+does two runs at a time):
     python learning_curve.py --data <train folder> --test <test folder> --pretrained <long80k_modelG> --out <results folder>
 Only the table and the figure, from finished runs (for example downloaded from Kaggle):
     ..\\.venv\\Scripts\\python.exe learning_curve.py --out data\\unet\\learning_curve --report-only --plot ..\\results\\learning_curve.png
@@ -49,6 +50,10 @@ def parse(argv=None):
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--threads", type=int)
+    ap.add_argument("--gpus", type=int, default=1,
+                    help="share the runs between this many GPUs, one process each (default 1); "
+                         "their output goes to <out>/gpu<N>.log")
+    ap.add_argument("--only", help=argparse.SUPPRESS)  # comma-separated runs: one process of --gpus
     args = ap.parse_args(argv)
     if not args.report_only and not args.data:
         ap.error("--data is needed to train (or use --report-only)")
@@ -81,6 +86,8 @@ def train_all(args):
     import unet_data
     data = test = None
     for name, argv in runs(args):
+        if args.only and name not in args.only.split(","):
+            continue
         out = os.path.join(args.out, name)
         if os.path.exists(os.path.join(out, "summary.json")):
             print(f"{name}: done before, skipped")
@@ -90,6 +97,50 @@ def train_all(args):
             test = unet_data.load(args.test, args.p_offset, args.exclude_clipped) if args.test else None
         print(f"\n===== {name} =====", flush=True)
         train_unet.run(train_unet.parse(argv + ["--out", out]), data, test)
+
+
+def train_parallel(args, argv):
+    """Share the runs between args.gpus GPUs: one process of this script per GPU (it sees only
+    that GPU, through CUDA_VISIBLE_DEVICES), each loading the samples once and doing every
+    args.gpus-th run of runs(), so all runs of one start (scratch or pretrained) share a GPU when
+    there are 2. Their output goes to <out>/gpu<N>.log; every 10 minutes the last line of each
+    log is printed here."""
+    import subprocess
+    import sys
+    import time
+    if args.device != "cpu":
+        import torch
+        if torch.cuda.device_count() < args.gpus:
+            raise SystemExit(f"--gpus {args.gpus}, but only {torch.cuda.device_count()} GPU(s) found")
+    names = [name for name, _ in runs(args)]
+    os.makedirs(args.out, exist_ok=True)
+    procs = []
+    for i in range(args.gpus):
+        path = os.path.join(args.out, f"gpu{i}.log")
+        cmd = [sys.executable, "-u", os.path.abspath(__file__)] + list(argv) + \
+              ["--gpus", "1", "--only", ",".join(names[i::args.gpus])]
+        with open(path, "w") as log:  # the process keeps its own copy of the file handle
+            procs.append((subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
+                                           env=dict(os.environ, CUDA_VISIBLE_DEVICES=str(i))), path))
+        print(f"GPU {i}: {len(names[i::args.gpus])} runs, output in {path}", flush=True)
+
+    def last_line(path):
+        with open(path, errors="replace") as f:
+            lines = [l.strip() for l in f.read().splitlines() if l.strip()]
+        return lines[-1] if lines else "(no output yet)"
+
+    start = shown = time.time()
+    while any(p.poll() is None for p, _ in procs):
+        time.sleep(10)
+        if time.time() - shown >= 600:
+            shown = time.time()
+            print(f"[{(shown - start) / 60:.0f} min]", flush=True)
+            for i, (_, path) in enumerate(procs):
+                print(f"  GPU {i}: {last_line(path)}", flush=True)
+    for i, (p, path) in enumerate(procs):
+        if p.returncode:
+            print(f"GPU {i} stopped with an error (code {p.returncode}), see {path}:\n  {last_line(path)}")
+    print(f"all GPUs finished after {(time.time() - start) / 60:.0f} min", flush=True)
 
 
 def collect(out):
@@ -188,9 +239,15 @@ def plot(rows, which, path):
 
 
 def main(argv=None):
+    import sys
     args = parse(argv)
     if not args.report_only:
-        train_all(args)
+        if args.gpus > 1:
+            train_parallel(args, sys.argv[1:] if argv is None else argv)
+        else:
+            train_all(args)
+    if args.only:
+        return  # one of the --gpus processes: the first process makes the table
     rows = collect(args.out)
     if not rows:
         raise SystemExit(f"no finished runs in {args.out}")
