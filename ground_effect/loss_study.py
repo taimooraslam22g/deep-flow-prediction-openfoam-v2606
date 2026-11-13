@@ -52,7 +52,8 @@ def label(settings):
     """A short name for the loss of a run, from its settings."""
     parts = [f"Cl term {settings['cl_weight']:g}"] if settings.get("cl_weight") else []
     if settings.get("wall_weight"):
-        parts.append(f"wall x{1 + settings['wall_weight']:g}, {settings['wall_cells']} cells")
+        cells = settings["wall_cells"]
+        parts.append(f"wall x{1 + settings['wall_weight']:g}, {cells} cell{'s' if cells != 1 else ''}")
     return " + ".join(parts) or "plain L1"
 
 
@@ -165,6 +166,9 @@ def plot(rows, path):
                 ax.plot([v.min(), v.max()], [i + shift] * 2, color=COLOR, lw=1.2, solid_capstyle="round")
                 ax.plot(v.mean(), i + shift, "o", ms=5.5, color=COLOR, mfc=COLOR if filled else "white", mew=1.3)
         ax.axvline(100 * np.mean(m[names[0]]["test"][key]), color=INK, lw=0.8, ls="--")
+        for i in range(1, len(names)):  # a line between the plain loss, the Cl terms and the wall weightings
+            if m[names[i]]["label"].split()[0] != m[names[i - 1]]["label"].split()[0]:
+                ax.axhline(i - 0.5, color=GRID, lw=0.8)
         ax.set_xlim(0, 1.08 * top)
         ax.set(title=title, xlabel="%")
         ax.grid(axis="x", color=GRID, lw=0.6)

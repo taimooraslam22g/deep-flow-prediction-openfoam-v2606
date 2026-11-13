@@ -1343,13 +1343,14 @@ wing the pressure is 18% off, against 9.5% more than 4 cells away. Most of
 the Cl error comes from the side facing the ground, where the suction peak
 is (mean |ΔCl| 0.11 there, against 0.05 on the top side).
 
-We tried two additions to the loss (`train_unet.py --cl-weight` and
-`--wall-weight`), each with 789 samples, the free-air model as the start and
-2 seeds (about 2.3 hours on Kaggle):
+We tried two additions to the loss (`train_unet.py --cl-weight`,
+`--wall-weight` and `--wall-cells`), each with 789 samples, the free-air
+model as the start and 2 seeds (about 4 hours on Kaggle in all):
 - a **Cl term**: the batch's mean |Cl error| times a weight (0.001 to 0.1)
   is added to the L1 loss;
-- a **wall weighting**: the L1 loss counts 11 times more in the air cells
-  within 2 cells of the wing.
+- a **wall weighting**: the L1 loss counts more in the air cells near the
+  wing: 11 times more within 2 cells first, then also 4 and 31 times, and
+  within 1 and 4 cells.
 
 ![Downforce error, pressure error next to the wing and field error for each loss](results/ground_loss_study.png)
 
@@ -1364,7 +1365,11 @@ samples and the range of the seeds; `loss_study.py`):
 | Cl term 0.01 | 1.85% | 1.72% | 20.1% | 7.9% |
 | Cl term 0.03 | 2.02% | 1.86% | 30.1% | 8.1% |
 | Cl term 0.1 | 2.44% | 2.23% | 61.1% | 8.4% |
-| wall weighting | 2.00% | 1.64% | 11.2% | 7.7% |
+| wall ×4, 2 cells | 1.86% | 1.65% | 12.7% | 8.2% |
+| wall ×11, 1 cell | 1.91% | 1.65% | 11.4% | 7.6% |
+| wall ×11, 2 cells | 2.00% | 1.64% | 11.2% | 7.7% |
+| wall ×11, 4 cells | 2.07% | 1.65% | 11.4% | 7.9% |
+| wall ×31, 2 cells | 2.16% | 1.66% | 10.5% | 7.4% |
 
 - **The Cl term fixes the sum, not the pressure.** Every weight lowers the
   Cl error by about a quarter, to 7.9–8.4%. But the larger the weight, the
@@ -1372,22 +1377,31 @@ samples and the range of the seeds; `loss_study.py`):
   pressures whose errors cancel in the sum. With the weight 0.001 the field
   hardly changes, and the pressure next to the wing is only a little better
   than with the plain loss (16.8% against 18.3%).
-- **The wall weighting fixes the pressure at the wing.** It lowers the
-  pressure error next to the wing from 18% to 11% and the Cl error from 10.9%
-  to 7.7% (R² 0.81 → 0.90). Cl comes closer to the simulation on 63 and 70 of
-  the 102 test samples (the two seeds). Its larger field error (2.00%) is
+- **The wall weighting fixes the pressure at the wing.** With 11 times over
+  2 cells, it lowers the pressure error next to the wing from 18% to 11% and
+  the Cl error from 10.9% to 7.7% (R² 0.81 → 0.90). Cl comes closer to the
+  simulation on 63 and 70 of the 102 test samples (the two seeds). Its
+  larger field error (2.00%) is
   output inside the wing and the ground, where every target is 0: the
   weighting makes those cells count less. The geometry is an input, so the
   output there can be set to 0 at no cost. Then its field error is the lowest
   of all (1.64%, against 1.69% with the plain loss).
-- **We use the wall weighting from now on**, with the output set to 0 in the
-  solid. It has the lowest Cl error on the validation samples (7.35%,
-  against 7.47% for the best Cl term and 10.3% for the plain loss). Its
-  weight and width (11 times, 2 cells) are not tuned yet.
+- **Its weight and width matter little.** From 11 to 31 times and from 1 to
+  4 cells, the Cl error is 7.35–7.60% on the validation samples, and the two
+  seeds differ by up to 0.4 points. A larger weight lowers the pressure error
+  next to the wing a little more (10.1% at 31 times against 10.6% at 11
+  times, validation samples) but raises the field error (1.57% against
+  1.51%, output 0 in the solid). 4 times is too little (Cl 7.90%).
+- **We use the wall weighting from now on, 11 times over 2 cells**, with the
+  output set to 0 in the solid. It has the lowest Cl error on the validation
+  samples (7.35%, against 7.38% at 31 times, 7.47% for the best Cl term and
+  10.3% for the plain loss), and its field error is as low as any (1.51%,
+  output 0 in the solid).
 
-**Next:** the second 1000 runs (about 870 more samples); then the learning
-curve again with the wall weighting, also with other weights and widths for
-it; and figures of predicted and simulated flow fields.
+**Next:** more training runs (about 870 samples per 1000 runs); then the
+learning curve again with the wall weighting; ride-height sweeps of two
+airfoils the U-Net has not seen, the Tyrrell 026 and the NACA 4412; and
+figures of predicted and simulated flow fields.
 
 ---
 
@@ -1535,7 +1549,7 @@ runs are skipped.
 The loss comparison ([Downforce](#downforce-from-the-predicted-pressure))
 ran in the same notebook, one `learning_curve.py` per loss, for example:
 ```python
-for name, opt in [("cl0.001", "--cl-weight 0.001"), ("wall10", "--wall-weight 10")]:
+for name, opt in [("cl0.001", "--cl-weight 0.001"), ("wall10", "--wall-weight 10"), ("wall10c1", "--wall-weight 10 --wall-cells 1")]:
     !python learning_curve.py --data {data}/train --test {data}/test --pretrained {model} --fractions 1 --starts pretrained --gpus 2 {opt} --out /kaggle/working/loss/{name}
 ```
 Put the folder `loss` from its output into `ground_effect/data/unet/`, next
