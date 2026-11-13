@@ -8,9 +8,10 @@ the free-air model is tested as it is ('zero-shot'). Each run has its own folder
 example f0.25_pretrained_s0/, see train_unet.py for what is in it). Runs that already have a
 summary.json are not repeated, so after an interruption the same command goes on where it
 stopped. At the end it writes <out>/learning_curve.csv (one line per run) and prints the table
-(with the Cl error, see train_unet.py); --plot also draws the figure. --starts pretrained trains
-only from the free-air model, and --cl-weight, --wall-weight and --wall-cells are passed on to
-train_unet.py (to compare losses at one amount of data, use --fractions 1 and one --out per loss).
+(with the downforce measures of train_unet.py); --plot also draws the figure. --starts pretrained
+trains only from the free-air model, and --cl-weight, --wall-weight and --wall-cells are passed
+on to train_unet.py (to compare losses at one amount of data, use --fractions 1 and one --out per
+loss, then loss_study.py).
 
 On a GPU, from the ground_effect folder (see the README for Kaggle; with two GPUs, --gpus 2
 does two runs at a time):
@@ -29,7 +30,8 @@ STARTS = ("scratch", "pretrained")
 COLORS = {"scratch": "#2a78d6", "pretrained": "#eb6834"}  # categorical slots 1 and 2, as in the other reports
 NAMES = {"scratch": "from random weights", "pretrained": "from the free-air model"}
 COLUMNS = ["run", "start", "fraction", "n_train", "seed", "iterations", "train_minutes", "val_p", "val_v", "val_all",
-           "test_p", "test_v", "test_all", "val_cl", "test_cl", "best_iteration", "best_val_all", "best_test_all"]
+           "test_p", "test_v", "test_all", "val_cl", "test_cl", "val_all_zeroed", "test_all_zeroed", "val_p_near_wing",
+           "test_p_near_wing", "best_iteration", "best_val_all", "best_test_all"]
 
 
 def parse(argv=None):
@@ -170,7 +172,10 @@ def collect(out):
         for name in ("val", "test"):
             for k in ("p", "v", "all"):
                 row[f"{name}_{k}"] = s[name][k] if name in s else np.nan
-            row[f"{name}_cl"] = s[name].get("cl", {}).get("rel", np.nan) if name in s else np.nan  # older runs: none
+            got = s.get(name, {})  # older runs have no Cl, zeroed and p_near_wing
+            row[f"{name}_cl"] = got.get("cl", {}).get("rel", np.nan)
+            row[f"{name}_all_zeroed"] = got.get("zeroed", {}).get("all", np.nan)
+            row[f"{name}_p_near_wing"] = got.get("p_near_wing", np.nan)
         rows.append(row)
     return rows
 
@@ -193,20 +198,23 @@ def groups(rows, which):
 
 
 def table(rows, which):
-    print(f"\nError on the {which} samples (%, mean over the seeds; Cl: mean |Cl error| / mean |Cl|; "
-          f"then each seed's 'all'):")
-    print(f"  {'start':10s} {'samples':>7s} {'seeds':>5s} {'p':>8s} {'v':>7s} {'all':>7s} {'Cl':>7s}   all per seed")
-    cl = lambda x: f"{x:7.2f}" if np.isfinite(x) else f"{'-':>7s}"
+    print(f"\nError on the {which} samples (%, mean over the seeds; '0 in solid': all, with the output set to 0 "
+          f"inside the wing and the ground; 'p at wing': pressure in the air cells next to the wing; Cl: mean "
+          f"|Cl error| / mean |Cl|; then each seed's 'all'):")
+    print(f"  {'start':10s} {'samples':>7s} {'seeds':>5s} {'p':>8s} {'v':>7s} {'all':>7s} {'0 in solid':>10s} "
+          f"{'p at wing':>9s} {'Cl':>7s}   all per seed")
+    opt = lambda x, width=7: f"{x:{width}.2f}" if np.isfinite(x) else f"{'-':>{width}s}"  # older runs: '-'
+    extra = lambda get: f"{opt(get('all_zeroed'), 10)} {opt(get('p_near_wing'), 9)} {opt(get('cl'))}"
     for r in rows:
         if r["start"] == "zero-shot":
-            print(f"  {'zero-shot':10s} {0:7d} {'-':>5s} {100 * r[which + '_p']:8.2f} {100 * r[which + '_v']:7.2f} "
-                  f"{100 * r[which + '_all']:7.2f} {cl(100 * r[which + '_cl'])}")
+            get = lambda k: 100 * r[f"{which}_{k}"]
+            print(f"  {'zero-shot':10s} {0:7d} {'-':>5s} {get('p'):8.2f} {get('v'):7.2f} {get('all'):7.2f} {extra(get)}")
     for start in STARTS:
         for n, _ in groups(rows, f"{which}_all")[start]:
             sel = [r for r in rows if r["start"] == start and r["n_train"] == n]
             mean = lambda k: 100 * np.mean([r[f"{which}_{k}"] for r in sel])
             print(f"  {start:10s} {n:7d} {len(sel):5d} {mean('p'):8.2f} {mean('v'):7.2f} {mean('all'):7.2f} "
-                  f"{cl(mean('cl'))}   " + " ".join(f"{100 * r[which + '_all']:.2f}" for r in sel))
+                  f"{extra(mean)}   " + " ".join(f"{100 * r[which + '_all']:.2f}" for r in sel))
 
 
 def plot(rows, which, path):

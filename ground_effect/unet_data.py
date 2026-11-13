@@ -74,13 +74,14 @@ def denormalise(targets, speed):
     return out
 
 
-def load(folder, p_offset="fluid", exclude_clipped=False):
-    """All samples in folder (see sample_files), normalised. Returns a dict with 'inputs' and
-    'targets' (N x 3 x 128 x 128, float32), 'file' (path in folder), 'airfoil', 'h' (h/c),
-    'alpha' (deg), 'U' (m/s) and 'clipped' (nuTilda still clipped at the end of the run). The
-    original free-air files have only the array: there h and alpha are NaN, clipped is False and
-    the airfoil name comes from the file name."""
-    files = sample_files(folder)
+def load(folder, p_offset="fluid", exclude_clipped=False, files=None):
+    """All samples in folder (see sample_files), or only files (paths in folder, as in 'file'), in
+    that order; normalised. Returns a dict with 'inputs' and 'targets' (N x 3 x 128 x 128,
+    float32), 'file' (path in folder), 'airfoil', 'h' (h/c), 'alpha' (deg), 'U' (m/s) and
+    'clipped' (nuTilda still clipped at the end of the run). The original free-air files have
+    only the array: there h and alpha are NaN, clipped is False and the airfoil name comes from
+    the file name."""
+    files = sample_files(folder) if files is None else [os.path.join(folder, *f.split("/")) for f in files]
     if not files:
         raise SystemExit(f"no samples (.npz files) in {folder}")
     n = len(files)
@@ -142,7 +143,7 @@ def lift_weights(mask):
     cell below pushes it up. Cl = F_y / (1/2 rho U^2 c) with the chord c = 1 and y upwards, so
     downforce is negative, as in OpenFOAM. A constant pressure gives 0 (the staircase is closed),
     so the pressure offset does not matter. On the CFD pressure of the 102 test samples this is
-    within about 3% of OpenFOAM's Cl (0.04 on average, slightly less downforce)."""
+    about 3% off OpenFOAM's Cl on average (0.04, slightly less downforce)."""
     wing = wing_cells(mask)
     wing_below = np.zeros_like(wing)
     wing_below[..., :, 1:] = wing[..., :, :-1]  # the cell below is wing: the wing's top side
@@ -186,6 +187,21 @@ def near_wing(mask, cells):
             grown[tuple(behind)] |= near[tuple(ahead)]
             near = grown
     return near & ~mask
+
+
+def zero_solid(pred, inputs):
+    """pred (N x 3 x 128 x 128) with the output set to 0 inside the mask (the wing and the ground),
+    where every target is 0. The mask is an input, so this costs nothing; relative_errors of the
+    result counts only the errors in the air."""
+    return np.where(np.asarray(inputs)[:, 2:3] > 0.5, 0, np.asarray(pred, np.float32))
+
+
+def near_wing_error(pred, target, inputs, cells=1):
+    """The pressure error in the air cells at most cells from the wing (cells=1: the cells that
+    lift_weights uses): sum |p - p_cfd| / sum |p_cfd| over these cells of all samples."""
+    ring = near_wing(np.asarray(inputs)[:, 2] > 0.5, cells)
+    p, p_cfd = np.asarray(pred, np.float64)[:, 0], np.asarray(target, np.float64)[:, 0]
+    return float(np.abs(p - p_cfd)[ring].sum() / np.abs(p_cfd[ring]).sum())
 
 
 def by_bins(errors, values, edges):

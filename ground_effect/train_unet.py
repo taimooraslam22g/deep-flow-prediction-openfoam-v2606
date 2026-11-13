@@ -20,6 +20,8 @@ pressure against Cl from the simulated pressure, both from the grid cells next t
     errors_<set>.csv    the errors and Cl of each validation and test sample, with airfoil, h/c,
                         alpha, U
     summary.json        the settings, the mean errors (also by ride height, angle and speed), the
+                        same with the output set to 0 inside the wing and the ground ('zeroed'),
+                        the pressure error in the air cells next to the wing ('p_near_wing'), the
                         Cl error ('cl') and the errors of the model at the iteration with the
                         lowest validation loss
     train.log           what was printed
@@ -107,6 +109,20 @@ def summarise(errors, data):
             "by_h": unet_data.by_bins(errors, data["h"], unet_data.H_EDGES),
             "by_alpha": unet_data.by_bins(errors, data["alpha"], unet_data.ALPHA_EDGES),
             "by_U": unet_data.by_bins(errors, data["U"], unet_data.U_EDGES)}
+
+
+def evaluate(pred, data):
+    """All measures of the predictions pred for the samples data (a dict from unet_data.load):
+    the summary (summarise, plus 'cl', 'zeroed' and 'p_near_wing', see the top), the errors of
+    each sample, and the Cl of each sample from the predicted and from the simulated pressure."""
+    err = unet_data.relative_errors(pred, data["targets"])
+    cl_pred, cl_cfd = unet_data.lift_errors(pred, data["targets"], data["inputs"])
+    zeroed = unet_data.relative_errors(unet_data.zero_solid(pred, data["inputs"]), data["targets"])
+    summary = summarise(err, data)
+    summary["cl"] = unet_data.lift_summary(cl_pred, cl_cfd)
+    summary["zeroed"] = {k: float(zeroed[k].mean()) for k in ("p", "v", "all")}
+    summary["p_near_wing"] = unet_data.near_wing_error(pred, data["targets"], data["inputs"])
+    return summary, err, cl_pred, cl_cfd
 
 
 def write_errors(path, errors, data, cl_pred, cl_cfd):
@@ -225,15 +241,12 @@ def run(args, data=None, test=None):
                "torch": torch.__version__, "train_seconds": round(train_seconds, 1)}
     sets = [("val", val)] + ([("test", test)] if test else [])
     for name, d in sets:
-        pred = predict(net, to_device(d["inputs"]))
-        err = unet_data.relative_errors(pred, d["targets"])
-        cl_pred, cl_cfd = unet_data.lift_errors(pred, d["targets"], d["inputs"])
+        summary[name], err, cl_pred, cl_cfd = evaluate(predict(net, to_device(d["inputs"])), d)
         write_errors(os.path.join(args.out, f"errors_{name}.csv"), err, d, cl_pred, cl_cfd)
-        summary[name] = summarise(err, d)
-        summary[name]["cl"] = unet_data.lift_summary(cl_pred, cl_cfd)
-        log(f"{name}: {summary[name]['n']} samples, error p {100 * summary[name]['p']:.2f}%, "
-            f"v {100 * summary[name]['v']:.2f}%, all {100 * summary[name]['all']:.2f}%; Cl error "
-            f"{100 * summary[name]['cl']['rel']:.2f}% (mean |dCl| {summary[name]['cl']['mae']:.3f})")
+        s = summary[name]
+        log(f"{name}: {s['n']} samples, error p {100 * s['p']:.2f}%, v {100 * s['v']:.2f}%, all {100 * s['all']:.2f}% "
+            f"(output 0 in the solid: all {100 * s['zeroed']['all']:.2f}%); pressure next to the wing "
+            f"{100 * s['p_near_wing']:.2f}%; Cl error {100 * s['cl']['rel']:.2f}% (mean |dCl| {s['cl']['mae']:.3f})")
     if best[2] is not None:  # the model at the lowest validation loss, for comparison
         net.load_state_dict(best[2])
         summary["best_val"] = {"iteration": best[1]}

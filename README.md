@@ -11,7 +11,9 @@ high-resolution LES (skin friction within 6–7%), wind-tunnel tests of an F1
 wing (downforce gain near the ground within 4%) and finer meshes (0.04–3%).
 Trained on 789 of these simulations, the U-Net predicts the flow around 30
 airfoils it has not seen with a 1.8% error, against 24% for the free-air
-model used as it is. More simulations are being made.
+model used as it is. The downforce computed from its pressure is off by 11%,
+and by 7.7% with a loss that counts the cells next to the wing more. More
+simulations are being made.
 
 **Main results:** [reproduction](#results) ·
 [comparison with high-resolution LES](#mesh-study-round-2) ·
@@ -19,7 +21,8 @@ model used as it is. More simulations are being made.
 [mesh study](#mesh-study-round-3-numerical-verification) ·
 [airfoil shapes](#airfoil-shapes-for-the-dataset) ·
 [parameter scan](#parameter-scan-where-does-steady-rans-converge) ·
-[U-Net in ground effect](#learning-curve)
+[U-Net in ground effect](#learning-curve) ·
+[downforce](#downforce-from-the-predicted-pressure)
 
 - Paper: https://arxiv.org/abs/1810.08217
 - Original code: https://github.com/thunil/Deep-Flow-Prediction (Apache-2.0)
@@ -52,6 +55,7 @@ model used as it is. More simulations are being made.
 | Sample | One simulation, stored as six 128 × 128 images: 3 inputs (the air's speed, and where the wing and the ground are) and 3 outputs (pressure and the two velocity components) |
 | U-Net | The type of neural network used: it turns input images into output images |
 | Surrogate | A fast model that replaces the slow simulation |
+| Loss (L1) | What training makes small: how far the network's output is from the simulation. L1 is the mean absolute difference |
 
 </details>
 
@@ -67,7 +71,7 @@ model used as it is. More simulations are being made.
 | 4. Download the authors' precomputed dataset | Done: `data_6k` from the [TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791) (1.3 GB, 6,400 train / 90 test, SHA-512 verified). The training code expects it in `Deep-Flow-Prediction/data/train` and `data/test` |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare our results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against high-resolution LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them); first 1000 runs (867 samples) and the test set (102 samples); learning curve (1.8% test error with 789 training samples). Now: 1000 more runs. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against high-resolution LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them); first 1000 runs (867 samples) and the test set (102 samples); learning curve (1.8% test error with 789 training samples); downforce from the predicted pressure (11% error, 7.7% with a loss weighted next to the wing). Now: 1000 more runs. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ---
 
@@ -1319,9 +1323,71 @@ points at most):
   error is 15–16% on both the test and the validation samples, against 8–11%
   from h/c 0.135 up (models from the free-air model, 789 samples).
 
-**Next:** the second 1000 runs (about 870 more samples) and the learning
-curve again; the downforce computed from the predicted pressure, against the
-simulations; and figures of predicted and simulated flow fields.
+#### Downforce from the predicted pressure
+
+The error above is averaged over the whole image. For a wing, the number
+that matters most is the downforce, so we also compute Cl from the predicted
+pressure (`unet_data.lift_weights`). On the 128 × 128 grid the wing is a
+staircase of cells: the pressure in the air cell above each top face pushes
+the wing down, and the one below each bottom face pushes it up. On the
+simulated pressure this is 3% off OpenFOAM's Cl on average (mean difference
+0.04 on the 102 test samples, with slightly less downforce). So we compare
+the Cl of the predicted pressure with the Cl of the simulated pressure, both
+computed in this way.
+
+**The 1.8% field error hides an 11% downforce error.** With the plain L1
+loss (789 samples, from the free-air model), Cl is off by 0.13 on average:
+11% of the mean |Cl| of 1.24, with R² 0.81 (the free-air model as it is:
+121%). The error sits at the wing's surface. In the air cells next to the
+wing the pressure is 18% off, against 9.5% more than 4 cells away. Most of
+the Cl error comes from the side facing the ground, where the suction peak
+is (mean |ΔCl| 0.11 there, against 0.05 on the top side).
+
+We tried two additions to the loss (`train_unet.py --cl-weight` and
+`--wall-weight`), each with 789 samples, the free-air model as the start and
+2 seeds (about 2.3 hours on Kaggle):
+- a **Cl term**: the batch's mean |Cl error| times a weight (0.001 to 0.1)
+  is added to the L1 loss;
+- a **wall weighting**: the L1 loss counts 11 times more in the air cells
+  within 2 cells of the wing.
+
+![Downforce error, pressure error next to the wing and field error for each loss](results/ground_loss_study.png)
+
+Test samples, mean of the 2 seeds (the figure also shows the validation
+samples and the range of the seeds; `loss_study.py`):
+
+| Loss | Field error, as the original | Field error, output 0 in the solid | Pressure next to the wing | Downforce (Cl) |
+|---|---|---|---|---|
+| plain L1 | 1.81% | 1.69% | 18.3% | 10.9% |
+| Cl term 0.001 | 1.83% | 1.70% | 16.8% | 8.1% |
+| Cl term 0.003 | 1.80% | 1.68% | 17.5% | 7.9% |
+| Cl term 0.01 | 1.85% | 1.72% | 20.1% | 7.9% |
+| Cl term 0.03 | 2.02% | 1.86% | 30.1% | 8.1% |
+| Cl term 0.1 | 2.44% | 2.23% | 61.1% | 8.4% |
+| wall weighting | 2.00% | 1.64% | 11.2% | 7.7% |
+
+- **The Cl term fixes the sum, not the pressure.** Every weight lowers the
+  Cl error by about a quarter, to 7.9–8.4%. But the larger the weight, the
+  worse the pressure next to the wing (61% off at 0.1): the network learns
+  pressures whose errors cancel in the sum. With the weight 0.001 the field
+  hardly changes, and the pressure next to the wing is only a little better
+  than with the plain loss (16.8% against 18.3%).
+- **The wall weighting fixes the pressure at the wing.** It lowers the
+  pressure error next to the wing from 18% to 11% and the Cl error from 10.9%
+  to 7.7% (R² 0.81 → 0.90). Cl comes closer to the simulation on 63 and 70 of
+  the 102 test samples (the two seeds). Its larger field error (2.00%) is
+  output inside the wing and the ground, where every target is 0: the
+  weighting makes those cells count less. The geometry is an input, so the
+  output there can be set to 0 at no cost. Then its field error is the lowest
+  of all (1.64%, against 1.69% with the plain loss).
+- **We use the wall weighting from now on**, with the output set to 0 in the
+  solid. It has the lowest Cl error on the validation samples (7.35%,
+  against 7.47% for the best Cl term and 10.3% for the plain loss). Its
+  weight and width (11 times, 2 cells) are not tuned yet.
+
+**Next:** the second 1000 runs (about 870 more samples); then the learning
+curve again with the wall weighting, also with other weights and widths for
+it; and figures of predicted and simulated flow fields.
 
 ---
 
@@ -1466,6 +1532,20 @@ iteration) and about 21 minutes when Kaggle's two T4s run one each
 If the notebook stops before the end, run the same command again: finished
 runs are skipped.
 
+The loss comparison ([Downforce](#downforce-from-the-predicted-pressure))
+ran in the same notebook, one `learning_curve.py` per loss, for example:
+```python
+for name, opt in [("cl0.001", "--cl-weight 0.001"), ("wall10", "--wall-weight 10")]:
+    !python learning_curve.py --data {data}/train --test {data}/test --pretrained {model} --fractions 1 --starts pretrained --gpus 2 {opt} --out /kaggle/working/loss/{name}
+```
+Put the folder `loss` from its output into `ground_effect/data/unet/`, next
+to `learning_curve` (its runs with all the samples are the plain loss). Then
+the table and the figure:
+```powershell
+cd ground_effect
+..\.venv\Scripts\python.exe loss_study.py --data data\dataset\train --test data\dataset\test --plain data\unet\learning_curve --loss data\unet\loss --plot ..\results\ground_loss_study.png
+```
+
 The Windows scripts (training, `make_tyrrell026.py` and the airfoil scripts)
 run in a local Python environment, `.venv`: Python 3.14 with numpy 2.5,
 scipy 1.18, matplotlib 3.11 and PyTorch 2.15 (CPU).
@@ -1510,9 +1590,10 @@ ground_effect/clip_test_report.py tables and figure of that test
 ground_effect/clip_cells.py       finds the cells where OpenFOAM clipped nuTilda in a finished run
 ground_effect/dataset.sh          makes the dataset with several runs at a time (inside the container)
 ground_effect/unet.py             the U-Net of the original code (copied from DfpNet.py, unchanged)
-ground_effect/unet_data.py        loads and normalises the ground-effect samples; the original error measure
+ground_effect/unet_data.py        loads and normalises the ground-effect samples; the original error measure and the downforce from the pressure
 ground_effect/train_unet.py       trains one U-Net (from random weights or from the free-air model) and tests it
 ground_effect/learning_curve.py   trains and tests U-Nets on parts of the data, then the table and figure
+ground_effect/loss_study.py       compares training losses for the downforce: table and figure
 results/                    figures and reproduction results
 Deep-Flow-Prediction/       the original repo, cloned locally (not committed)
 ```
