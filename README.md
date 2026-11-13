@@ -8,15 +8,18 @@ software: OpenFOAM v2606, gmsh 4 and Docker on Windows (about 3% test error,
 as in the paper). It is extended here to **inverted airfoils in ground effect**
 (F1 front wings). The ground-effect simulations are checked against
 high-resolution LES (skin friction within 6–7%), wind-tunnel tests of an F1
-wing (downforce gain near the ground within 4%) and finer meshes (0.04–3%);
-the dataset is being generated now.
+wing (downforce gain near the ground within 4%) and finer meshes (0.04–3%).
+Trained on 789 of these simulations, the U-Net predicts the flow around 30
+airfoils it has not seen with a 1.8% error, against 24% for the free-air
+model used as it is. More simulations are being made.
 
 **Main results:** [reproduction](#results) ·
 [comparison with high-resolution LES](#mesh-study-round-2) ·
 [comparison with the wind tunnel](#validation-in-ground-effect-the-tyrrell-026-wing) ·
 [mesh study](#mesh-study-round-3-numerical-verification) ·
 [airfoil shapes](#airfoil-shapes-for-the-dataset) ·
-[parameter scan](#parameter-scan-where-does-steady-rans-converge)
+[parameter scan](#parameter-scan-where-does-steady-rans-converge) ·
+[U-Net in ground effect](#learning-curve)
 
 - Paper: https://arxiv.org/abs/1810.08217
 - Original code: https://github.com/thunil/Deep-Flow-Prediction (Apache-2.0)
@@ -64,7 +67,7 @@ the dataset is being generated now.
 | 4. Download the authors' precomputed dataset | Done: `data_6k` from the [TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791) (1.3 GB, 6,400 train / 90 test, SHA-512 verified). The training code expects it in `Deep-Flow-Prediction/data/train` and `data/test` |
 | 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Results](#results) |
 | 6. Compare our results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against high-resolution LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them). Now: making the dataset; the training code is ready. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
+| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against high-resolution LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them); first 1000 runs (867 samples) and the test set (102 samples); learning curve (1.8% test error with 789 training samples). Now: 1000 more runs. See [Extension](#extension-inverted-airfoil-in-ground-effect-in-progress) |
 
 ---
 
@@ -1266,13 +1269,59 @@ first 516 ground-effect samples, the Run 3 model has a combined error of 24.6%
 (pressure 180%, velocity 18.9%), against 2.96% in free air. The error grows
 closer to the ground: 28% for h/c 0.05–0.08, 21% for h/c 0.37–0.6.
 
-**Next: the learning curve** (`learning_curve.py`). We train models on 12.5,
-25, 50 and 100% of the training samples, each from random weights and from
-the free-air model (transfer learning), with 2 seeds, and test them all on the
-30 test airfoils, which are not in the training data. This shows whether more
-simulations are worth running, and how much the free-air model helps. It is
-16 runs of 80,000 iterations, so it runs on a GPU (see
+**The data so far.** The first 1000 runs gave 867 converged samples (120
+runs did not converge and 13 failed): 789 for training and 78 for
+validation. The test set, 120 runs on the 30 test airfoils, gave 102 samples
+(13 did not converge and 5 failed).
+
+#### Learning curve
+
+We trained models on 12.5, 25, 50 and 100% of the 789 training samples,
+each from random weights and from the free-air model of Run 3 (transfer
+learning), with 2 seeds, and tested them all on the 102 test samples, whose
+30 airfoils are not in the training data (`learning_curve.py`). The 16 runs
+of 80,000 iterations took about 3 hours on Kaggle's two Tesla T4 GPUs (see
 [How to run it](#how-to-run-it)).
+
+![Learning curve in ground effect](results/ground_learning_curve.png)
+
+Combined error on the test samples, mean of the 2 seeds (they differ by 0.17
+points at most):
+
+| Training samples | From random weights | From the free-air model |
+|---|---|---|
+| none (free-air model as it is) | – | 24.20% |
+| 99 | 3.59% | 3.19% |
+| 197 | 2.76% | 2.61% |
+| 394 | 2.25% | 2.10% |
+| 789 | 1.96% | 1.81% |
+
+- **The network adapts to the ground with little data.** 99 samples bring
+  the error from 24% down to 3.2%, and 789 samples to 1.8% (pressure 12.0%,
+  velocity 1.45%). As in free air, the pressure is the hardest field.
+- **More data still helps.** From 394 to 789 samples the error drops by
+  13–14%, and the curve does not level off yet. The second 1000 runs will add
+  a point at about 1,550 samples.
+- **The free-air model helps most when data are scarce.** With 99 samples,
+  starting from it lowers the error from 3.59 to 3.19%, and it is better on 78
+  of the 102 test samples. With 197–789 samples it is ahead by 0.15 points,
+  but most of that comes from one airfoil (next point): without it, the lead
+  is 0.05–0.06 points.
+- **One test airfoil lies outside the training shapes.** e864 is a symmetric
+  strut section, 39% thick; only one of the 1,462 training airfoils is
+  thicker, and 95% are at most 19% thick. Its 2 test samples have errors of
+  10% and 14% (from the free-air model; 14% and 20% from random weights),
+  which raises the mean by 0.2–0.3 points. Without e864 the test error (1.60%
+  and 1.66%) is about the same as the validation error (1.65% and 1.60%): new
+  airfoils like those in training are predicted as well as new flow
+  conditions.
+- **The pressure is hardest closest to the ground.** For h/c 0.05–0.08 its
+  error is 15–16% on both the test and the validation samples, against 8–11%
+  from h/c 0.135 up (models from the free-air model, 789 samples).
+
+**Next:** the second 1000 runs (about 870 more samples) and the learning
+curve again; the downforce computed from the predicted pressure, against the
+simulations; and figures of predicted and simulated flow fields.
 
 ---
 
@@ -1388,8 +1437,9 @@ cd ground_effect
 ..\.venv\Scripts\python.exe train_unet.py --data data\dataset\train --fraction 0.1 --iterations 100 --threads 2 --out data\unet\check
 ```
 The learning curve needs a GPU, for example a Kaggle notebook. On a Tesla T4,
-one run of 80,000 iterations takes about 16 minutes (12 ms per iteration), so
-the 16 runs take about 2.5 hours on Kaggle's two T4s with `--gpus 2`:
+one run of 80,000 iterations takes about 16 minutes alone (12 ms per
+iteration) and about 21 minutes when Kaggle's two T4s run one each
+(`--gpus 2`), so the 16 runs take about 3 hours:
 1. Make a private Kaggle dataset from a zip file with the folders `train` and
    `test` (from `ground_effect/data/dataset/`) and the file `long80k_modelG`
    (the Run 3 model, from `Deep-Flow-Prediction/train/`).
@@ -1406,11 +1456,13 @@ the 16 runs take about 2.5 hours on Kaggle's two T4s with `--gpus 2`:
    Then click "Save Version" and choose "Save & Run All (Commit)": the
    notebook runs in the background (the browser can be closed) and its
    output is kept.
-3. Download `learning_curve` from the notebook's output into
-   `ground_effect/data/unet/`, then on Windows:
+3. Download the notebook's output (its Output tab) and put the folder
+   `learning_curve` from it into `ground_effect/data/unet/`, then on Windows:
    ```powershell
-   .venv\Scripts\python.exe ground_effect\learning_curve.py --out ground_effect\data\unet\learning_curve --report-only --plot results\learning_curve.png
+   .venv\Scripts\python.exe ground_effect\learning_curve.py --out ground_effect\data\unet\learning_curve --report-only --plot results\ground_learning_curve.png
    ```
+   For more data later, make a new version of the Kaggle dataset from a new
+   zip file; a notebook made from the dataset's page uses its newest version.
 If the notebook stops before the end, run the same command again: finished
 runs are skipped.
 

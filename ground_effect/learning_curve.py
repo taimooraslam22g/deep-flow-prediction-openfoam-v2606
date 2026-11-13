@@ -183,7 +183,7 @@ def groups(rows, which):
 
 
 def table(rows, which):
-    print(f"\nError on the {which} samples (%, mean over the seeds; the seeds' values in brackets):")
+    print(f"\nError on the {which} samples (%, mean over the seeds; then each seed's 'all'):")
     print(f"  {'start':10s} {'samples':>7s} {'seeds':>5s} {'p':>8s} {'v':>7s} {'all':>7s}   all per seed")
     for r in rows:
         if r["start"] == "zero-shot":
