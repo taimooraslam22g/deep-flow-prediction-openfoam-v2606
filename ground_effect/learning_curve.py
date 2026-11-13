@@ -7,8 +7,10 @@ trained from random weights and one from --pretrained, with the settings of trai
 the free-air model is tested as it is ('zero-shot'). Each run has its own folder in --out (for
 example f0.25_pretrained_s0/, see train_unet.py for what is in it). Runs that already have a
 summary.json are not repeated, so after an interruption the same command goes on where it
-stopped. At the end it writes <out>/learning_curve.csv (one line per run) and prints the table;
---plot also draws the figure.
+stopped. At the end it writes <out>/learning_curve.csv (one line per run) and prints the table
+(with the Cl error, see train_unet.py); --plot also draws the figure. --starts pretrained trains
+only from the free-air model, and --cl-weight, --wall-weight and --wall-cells are passed on to
+train_unet.py (to compare losses at one amount of data, use --fractions 1 and one --out per loss).
 
 On a GPU, from the ground_effect folder (see the README for Kaggle; with two GPUs, --gpus 2
 does two runs at a time):
@@ -27,7 +29,7 @@ STARTS = ("scratch", "pretrained")
 COLORS = {"scratch": "#2a78d6", "pretrained": "#eb6834"}  # categorical slots 1 and 2, as in the other reports
 NAMES = {"scratch": "from random weights", "pretrained": "from the free-air model"}
 COLUMNS = ["run", "start", "fraction", "n_train", "seed", "iterations", "train_minutes", "val_p", "val_v", "val_all",
-           "test_p", "test_v", "test_all", "best_iteration", "best_val_all", "best_test_all"]
+           "test_p", "test_v", "test_all", "val_cl", "test_cl", "best_iteration", "best_val_all", "best_test_all"]
 
 
 def parse(argv=None):
@@ -39,6 +41,8 @@ def parse(argv=None):
     ap.add_argument("--fractions", type=float, nargs="+", default=[0.125, 0.25, 0.5, 1.0],
                     help="parts of the training samples (default 0.125 0.25 0.5 1)")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1], help="random seeds (default 0 1)")
+    ap.add_argument("--starts", nargs="+", choices=STARTS, default=list(STARTS),
+                    help="train from random weights (scratch), from --pretrained, or both (default)")
     ap.add_argument("--iterations", type=int, default=80000, help="training iterations of each run (default 80000)")
     ap.add_argument("--report-only", action="store_true", help="no training: only the table and the figure")
     ap.add_argument("--plot", help="draw the learning curve into this image")
@@ -47,6 +51,9 @@ def parse(argv=None):
     ap.add_argument("--val-percent", type=float, default=10)
     ap.add_argument("--exclude-clipped", action="store_true")
     ap.add_argument("--p-offset", choices=("fluid", "grid"), default="fluid")
+    ap.add_argument("--cl-weight", type=float, default=0.0)
+    ap.add_argument("--wall-weight", type=float, default=0.0)
+    ap.add_argument("--wall-cells", type=int, default=2)
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--threads", type=int)
@@ -69,11 +76,13 @@ def runs(args):
     common += ["--test", args.test] if args.test else []
     common += ["--threads", str(args.threads)] if args.threads else []
     common += ["--exclude-clipped"] if args.exclude_clipped else []
+    common += ["--cl-weight", str(args.cl_weight)] if args.cl_weight else []
+    common += ["--wall-weight", str(args.wall_weight), "--wall-cells", str(args.wall_cells)] if args.wall_weight else []
     todo = [("zero_shot", common + ["--pretrained", args.pretrained, "--iterations", "0"])] if args.pretrained else []
     for seed in args.seeds:
         for fraction in args.fractions:
             for start in STARTS:
-                if start == "pretrained" and not args.pretrained:
+                if start not in args.starts or (start == "pretrained" and not args.pretrained):
                     continue
                 todo.append((f"f{fraction:g}_{start}_s{seed}", common + ["--iterations", str(args.iterations),
                              "--fraction", str(fraction), "--seed", str(seed)] +
@@ -161,6 +170,7 @@ def collect(out):
         for name in ("val", "test"):
             for k in ("p", "v", "all"):
                 row[f"{name}_{k}"] = s[name][k] if name in s else np.nan
+            row[f"{name}_cl"] = s[name].get("cl", {}).get("rel", np.nan) if name in s else np.nan  # older runs: none
         rows.append(row)
     return rows
 
@@ -183,18 +193,20 @@ def groups(rows, which):
 
 
 def table(rows, which):
-    print(f"\nError on the {which} samples (%, mean over the seeds; then each seed's 'all'):")
-    print(f"  {'start':10s} {'samples':>7s} {'seeds':>5s} {'p':>8s} {'v':>7s} {'all':>7s}   all per seed")
+    print(f"\nError on the {which} samples (%, mean over the seeds; Cl: mean |Cl error| / mean |Cl|; "
+          f"then each seed's 'all'):")
+    print(f"  {'start':10s} {'samples':>7s} {'seeds':>5s} {'p':>8s} {'v':>7s} {'all':>7s} {'Cl':>7s}   all per seed")
+    cl = lambda x: f"{x:7.2f}" if np.isfinite(x) else f"{'-':>7s}"
     for r in rows:
         if r["start"] == "zero-shot":
             print(f"  {'zero-shot':10s} {0:7d} {'-':>5s} {100 * r[which + '_p']:8.2f} {100 * r[which + '_v']:7.2f} "
-                  f"{100 * r[which + '_all']:7.2f}")
+                  f"{100 * r[which + '_all']:7.2f} {cl(100 * r[which + '_cl'])}")
     for start in STARTS:
         for n, _ in groups(rows, f"{which}_all")[start]:
             sel = [r for r in rows if r["start"] == start and r["n_train"] == n]
             mean = lambda k: 100 * np.mean([r[f"{which}_{k}"] for r in sel])
-            print(f"  {start:10s} {n:7d} {len(sel):5d} {mean('p'):8.2f} {mean('v'):7.2f} {mean('all'):7.2f}   "
-                  + " ".join(f"{100 * r[which + '_all']:.2f}" for r in sel))
+            print(f"  {start:10s} {n:7d} {len(sel):5d} {mean('p'):8.2f} {mean('v'):7.2f} {mean('all'):7.2f} "
+                  f"{cl(mean('cl'))}   " + " ".join(f"{100 * r[which + '_all']:.2f}" for r in sel))
 
 
 def plot(rows, which, path):

@@ -12,14 +12,22 @@ unet_data.is_validation) are kept out of the training to follow it (validation s
 --fraction trains on only part of the others, to see how the error depends on the amount of
 data. At the end the model is tested on the validation samples and on the --test samples
 (airfoils that are not in the training data) with the error measure of the original test
-script (unet_data.relative_errors). Results in --out:
+script (unet_data.relative_errors), and by the downforce: Cl of the wing from the predicted
+pressure against Cl from the simulated pressure, both from the grid cells next to the wing
+(unet_data.lift_weights). Results in --out:
     model.pt            the trained weights (unet.TurbNetG(5).load_state_dict(torch.load(...)))
     history.csv         training and validation loss every --eval-every iterations
-    errors_<set>.csv    the errors of each validation and test sample, with airfoil, h/c, alpha, U
-    summary.json        the settings, the mean errors (also by ride height, angle and speed) and
-                        those of the model at the iteration with the lowest validation loss
+    errors_<set>.csv    the errors and Cl of each validation and test sample, with airfoil, h/c,
+                        alpha, U
+    summary.json        the settings, the mean errors (also by ride height, angle and speed), the
+                        Cl error ('cl') and the errors of the model at the iteration with the
+                        lowest validation loss
     train.log           what was printed
 With --iterations 0 and --pretrained, the model is only tested (the free-air model as it is).
+
+Two additions to the original loss, both off by default, aim at the downforce: --cl-weight adds
+the batch's mean |Cl error| (Cl as above), and --wall-weight weights the L1 loss more on the air
+cells next to the wing.
 
 Example, a short check on the laptop (from the ground_effect folder, Windows):
     ..\\.venv\\Scripts\\python.exe train_unet.py --data data\\dataset\\train --fraction 0.1 --iterations 100 --threads 2 --out data\\unet\\check
@@ -32,7 +40,6 @@ import time
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 import unet_data
 from unet import TurbNetG, weights_init
@@ -56,6 +63,12 @@ def parse(argv=None):
                     help="leave out the samples whose nuTilda was still clipped at the end of the run")
     ap.add_argument("--p-offset", choices=("fluid", "grid"), default="fluid",
                     help="pressure mean removed over the air (default) or over the whole grid (the original)")
+    ap.add_argument("--cl-weight", type=float, default=0.0,
+                    help="add this times the batch's mean |Cl error| to the loss (Cl of the wing from the pressure "
+                         "next to it, unet_data.lift_weights); default 0: the original L1 loss only")
+    ap.add_argument("--wall-weight", type=float, default=0.0,
+                    help="weight the L1 loss by 1 + this on the air cells within --wall-cells of the wing (default 0)")
+    ap.add_argument("--wall-cells", type=int, default=2, help="see --wall-weight (default 2 grid cells)")
     ap.add_argument("--eval-every", type=int, default=1000, help="validation every this many iterations (default 1000)")
     ap.add_argument("--device", default="auto", help="cuda, cpu or auto (default: cuda if there is a GPU)")
     ap.add_argument("--threads", type=int, help="number of CPU threads for torch (default: all)")
@@ -96,12 +109,13 @@ def summarise(errors, data):
             "by_U": unet_data.by_bins(errors, data["U"], unet_data.U_EDGES)}
 
 
-def write_errors(path, errors, data):
+def write_errors(path, errors, data, cl_pred, cl_cfd):
     with open(path, "w") as f:
-        f.write("file,airfoil,h_over_c,alpha_deg,U,clipped,error_p,error_v,error_all\n")
+        f.write("file,airfoil,h_over_c,alpha_deg,U,clipped,error_p,error_v,error_all,cl_cfd,cl_pred\n")
         for i, name in enumerate(data["file"]):
             f.write(f"{name},{data['airfoil'][i]},{data['h'][i]:.4f},{data['alpha'][i]:.4f},{data['U'][i]:.3f},"
-                    f"{int(data['clipped'][i])},{errors['p'][i]:.6f},{errors['v'][i]:.6f},{errors['all'][i]:.6f}\n")
+                    f"{int(data['clipped'][i])},{errors['p'][i]:.6f},{errors['v'][i]:.6f},{errors['all'][i]:.6f},"
+                    f"{cl_cfd[i]:.5f},{cl_pred[i]:.5f}\n")
 
 
 def run(args, data=None, test=None):
@@ -148,11 +162,19 @@ def run(args, data=None, test=None):
 
     to_device = lambda a: torch.from_numpy(a).to(device)
     X, Y, X_val = to_device(train["inputs"]), to_device(train["targets"]), to_device(val["inputs"])
+    mask = train["inputs"][:, 2] > 0.5
+    lift_w = lift_cfd = wall = None
+    if args.cl_weight:  # Cl = sum(lift_w * p / U^2), p / U^2 = MAX_TARGETS[0] * normalised p
+        lift_w = to_device(unet_data.lift_weights(mask) * np.float32(unet_data.MAX_TARGETS[0]))
+        lift_cfd = (lift_w * Y[:, 0]).sum(dim=(1, 2))
+        log(f"loss: L1 + {args.cl_weight:g} x mean |Cl error|")
+    if args.wall_weight:
+        wall = to_device((1 + args.wall_weight * unet_data.near_wing(mask, args.wall_cells)[:, None]).astype(np.float32))
+        log(f"loss: L1 weighted by {1 + args.wall_weight:g} within {args.wall_cells} cells of the wing")
     optimizer = torch.optim.Adam(net.parameters(), lr=args.lr, betas=(0.5, 0.999), weight_decay=0.0)
-    criterion = nn.L1Loss()
     order = torch.Generator().manual_seed(args.seed)
     history = open(os.path.join(args.out, "history.csv"), "w")
-    history.write("iteration,lr,train_l1,val_l1,val_error_p,val_error_v,val_error_all,seconds\n")
+    history.write("iteration,lr,train_l1,val_l1,val_error_p,val_error_v,val_error_all,seconds,val_cl_rel\n")
     best = (np.inf, 0, None)  # validation loss, iteration, weights
     it, loss_sum, loss_n, t0 = 0, torch.zeros((), device=device), 0, time.time()
     net.train()
@@ -164,15 +186,21 @@ def run(args, data=None, test=None):
             for group in optimizer.param_groups:
                 group["lr"] = lr
             optimizer.zero_grad(set_to_none=True)
-            loss = criterion(net(X[idx]), Y[idx])
+            out = net(X[idx])
+            diff = (out - Y[idx]).abs()
+            l1 = diff.mean()  # the original loss (nn.L1Loss)
+            loss = l1 if wall is None else (wall[idx] * diff).mean() / wall[idx].mean()
+            if lift_w is not None:
+                loss = loss + args.cl_weight * ((lift_w[idx] * out[:, 0]).sum(dim=(1, 2)) - lift_cfd[idx]).abs().mean()
             loss.backward()
             optimizer.step()
-            loss_sum += loss.detach()
+            loss_sum += l1.detach()
             loss_n += 1
             it += 1
             if it % args.eval_every == 0 or it == args.iterations:
                 pred = predict(net, X_val)
                 err = unet_data.relative_errors(pred, val["targets"])
+                val_cl = unet_data.lift_summary(*unet_data.lift_errors(pred, val["targets"], val["inputs"]))["rel"]
                 val_l1 = float(np.abs(pred - val["targets"]).mean())
                 train_l1 = float(loss_sum) / loss_n
                 loss_sum.zero_()
@@ -181,10 +209,10 @@ def run(args, data=None, test=None):
                     best = (val_l1, it, {k: v.detach().cpu().clone() for k, v in net.state_dict().items()})
                 took = time.time() - t0
                 history.write(f"{it},{lr:.6g},{train_l1:.6g},{val_l1:.6g},{err['p'].mean():.6g},"
-                              f"{err['v'].mean():.6g},{err['all'].mean():.6g},{took:.1f}\n")
+                              f"{err['v'].mean():.6g},{err['all'].mean():.6g},{took:.1f},{val_cl:.6g}\n")
                 history.flush()
                 log(f"{it:6d}/{args.iterations}  lr {lr:.1e}  train L1 {train_l1:.5f}  val L1 {val_l1:.5f}  "
-                    f"val error {100 * err['all'].mean():5.2f}%  ({took / 60:.1f} min, about "
+                    f"val error {100 * err['all'].mean():5.2f}%  Cl {100 * val_cl:5.2f}%  ({took / 60:.1f} min, about "
                     f"{took / it * (args.iterations - it) / 60:.0f} min left)")
                 net.train()
             if it == args.iterations:
@@ -197,11 +225,15 @@ def run(args, data=None, test=None):
                "torch": torch.__version__, "train_seconds": round(train_seconds, 1)}
     sets = [("val", val)] + ([("test", test)] if test else [])
     for name, d in sets:
-        err = unet_data.relative_errors(predict(net, to_device(d["inputs"])), d["targets"])
-        write_errors(os.path.join(args.out, f"errors_{name}.csv"), err, d)
+        pred = predict(net, to_device(d["inputs"]))
+        err = unet_data.relative_errors(pred, d["targets"])
+        cl_pred, cl_cfd = unet_data.lift_errors(pred, d["targets"], d["inputs"])
+        write_errors(os.path.join(args.out, f"errors_{name}.csv"), err, d, cl_pred, cl_cfd)
         summary[name] = summarise(err, d)
+        summary[name]["cl"] = unet_data.lift_summary(cl_pred, cl_cfd)
         log(f"{name}: {summary[name]['n']} samples, error p {100 * summary[name]['p']:.2f}%, "
-            f"v {100 * summary[name]['v']:.2f}%, all {100 * summary[name]['all']:.2f}%")
+            f"v {100 * summary[name]['v']:.2f}%, all {100 * summary[name]['all']:.2f}%; Cl error "
+            f"{100 * summary[name]['cl']['rel']:.2f}% (mean |dCl| {summary[name]['cl']['mae']:.3f})")
     if best[2] is not None:  # the model at the lowest validation loss, for comparison
         net.load_state_dict(best[2])
         summary["best_val"] = {"iteration": best[1]}

@@ -126,6 +126,68 @@ def relative_errors(pred, target):
             "all": diff.sum(axis=1) / size.sum(axis=1)}
 
 
+DX = 2.0 / RES  # grid spacing in chords (the grid spans 2 chords)
+
+
+def wing_cells(mask):
+    """The wing's cells of masks (bool, ... x 128 x 128, x index first): the ground fills whole
+    rows of the grid (all x) at the bottom, the wing never does. Without a ground: the mask."""
+    return mask & ~mask.all(axis=-2, keepdims=True)
+
+
+def lift_weights(mask):
+    """Weights w (float32, same shape as mask) with Cl = sum(w * p / U^2) for the wing in masks
+    (bool, ... x 128 x 128, x index first). The wing's grid cells form a staircase: the pressure
+    of the air cell above a wing cell pushes the wing down over one cell width, that of the air
+    cell below pushes it up. Cl = F_y / (1/2 rho U^2 c) with the chord c = 1 and y upwards, so
+    downforce is negative, as in OpenFOAM. A constant pressure gives 0 (the staircase is closed),
+    so the pressure offset does not matter. On the CFD pressure of the 102 test samples this is
+    within about 3% of OpenFOAM's Cl (0.04 on average, slightly less downforce)."""
+    wing = wing_cells(mask)
+    wing_below = np.zeros_like(wing)
+    wing_below[..., :, 1:] = wing[..., :, :-1]  # the cell below is wing: the wing's top side
+    wing_above = np.zeros_like(wing)
+    wing_above[..., :, :-1] = wing[..., :, 1:]  # the cell above is wing: the wing's bottom side
+    return (2 * DX * ~mask * (wing_above.astype(np.float32) - wing_below.astype(np.float32))).astype(np.float32)
+
+
+def lift(p, mask):
+    """Cl of the wing (see lift_weights) from p / U^2 (... x 128 x 128)."""
+    return (lift_weights(mask) * p).sum(axis=(-2, -1))
+
+
+def lift_errors(pred, target, inputs):
+    """Cl of each sample from the predicted and from the simulated pressure, both with
+    lift_weights, from normalised arrays (N x 3 x 128 x 128, as from load()): (predicted, CFD)."""
+    mask = np.asarray(inputs)[:, 2] > 0.5
+    to_p = lambda a: np.asarray(a, np.float64)[:, 0] * MAX_TARGETS[0]
+    return lift(to_p(pred), mask), lift(to_p(target), mask)
+
+
+def lift_summary(cl_pred, cl_cfd):
+    """The Cl error of a set of samples: mean |error| ('mae'), that divided by the mean |Cl|
+    ('rel'), the median of the samples' relative errors and R^2 of the predicted Cl."""
+    d = np.abs(cl_pred - cl_cfd)
+    return {"mae": float(d.mean()), "rel": float(d.mean() / np.abs(cl_cfd).mean()),
+            "median_rel": float(np.median(d / np.abs(cl_cfd))),
+            "r2": float(1 - np.sum((cl_pred - cl_cfd) ** 2) / np.sum((cl_cfd - cl_cfd.mean()) ** 2))}
+
+
+def near_wing(mask, cells):
+    """The air cells at most cells grid cells (in x and in y) from the wing (bool, as mask)."""
+    near = wing_cells(mask)
+    for _ in range(cells):  # grow by one cell along x, then along y: a square around each cell
+        for axis in (-2, -1):
+            grown = near.copy()
+            ahead = [slice(None)] * near.ndim
+            behind = [slice(None)] * near.ndim
+            ahead[axis], behind[axis] = slice(1, None), slice(None, -1)
+            grown[tuple(ahead)] |= near[tuple(behind)]
+            grown[tuple(behind)] |= near[tuple(ahead)]
+            near = grown
+    return near & ~mask
+
+
 def by_bins(errors, values, edges):
     """The mean errors and the number of samples in each bin of values (the last bin includes
     its upper end), as a list of dicts with lo, hi, n, p, v, all."""
