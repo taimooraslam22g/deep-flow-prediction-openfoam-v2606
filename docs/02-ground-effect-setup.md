@@ -1,6 +1,6 @@
 # 2. Ground-effect setup and first checks
 
-[README](../README.md) · ← [1. Reproduction](01-reproduction.md) · [3. Mesh study](03-mesh-study.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [1. Reproduction](01-reproduction.md) · [3. Mesh study](03-mesh-study.md) → · [Workflow](../README.md#workflow)
 
 Next we turned the airfoil upside down above a moving ground, the setting of an
 F1 front wing, and checked the basics on single cases. The original 500
@@ -143,4 +143,4 @@ iterations: about 1 minute per sample instead of 4.
 
 ---
 
-[README](../README.md) · ← [1. Reproduction](01-reproduction.md) · [3. Mesh study](03-mesh-study.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [1. Reproduction](01-reproduction.md) · [3. Mesh study](03-mesh-study.md) → · [Workflow](../README.md#workflow)

@@ -1,6 +1,6 @@
 # 5. Airfoil shapes for the dataset
 
-[README](../README.md) · ← [4. Wind-tunnel validation](04-wind-tunnel.md) · [6. Parameter scan](06-parameter-scan.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [4. Wind-tunnel validation](04-wind-tunnel.md) · [6. Parameter scan](06-parameter-scan.md) → · [Workflow](../README.md#workflow)
 
 The UIUC airfoil files have the same kinks as the Tyrrell table, most of them
 worse, so we smoothed all of them before making data: a quintic spline in √x,
@@ -182,4 +182,4 @@ generate the dataset.
 
 ---
 
-[README](../README.md) · ← [4. Wind-tunnel validation](04-wind-tunnel.md) · [6. Parameter scan](06-parameter-scan.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [4. Wind-tunnel validation](04-wind-tunnel.md) · [6. Parameter scan](06-parameter-scan.md) → · [Workflow](../README.md#workflow)

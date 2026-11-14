@@ -1,6 +1,6 @@
 # How to run it
 
-[README](../README.md) · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · [Workflow](../README.md#workflow)
 
 Every command behind the results on these pages: the Docker image, the original
 free-air pipeline, the ground-effect runs and checks, the airfoil smoothing, the

@@ -1,6 +1,6 @@
 # 6. Parameter scan: where does steady RANS converge?
 
-[README](../README.md) · ← [5. Airfoil shapes](05-airfoil-shapes.md) · [7. The dataset](07-dataset.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [5. Airfoil shapes](05-airfoil-shapes.md) · [7. The dataset](07-dataset.md) → · [Workflow](../README.md#workflow)
 
 Before making the dataset, 200 runs drawn like the dataset showed where steady
 RANS converges in the planned range: Cl becomes steady in most runs, but close
@@ -164,4 +164,4 @@ Share of the scan's runs by ride height:
 
 ---
 
-[README](../README.md) · ← [5. Airfoil shapes](05-airfoil-shapes.md) · [7. The dataset](07-dataset.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [5. Airfoil shapes](05-airfoil-shapes.md) · [7. The dataset](07-dataset.md) → · [Workflow](../README.md#workflow)

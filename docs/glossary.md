@@ -1,6 +1,6 @@
 # Glossary
 
-[README](../README.md) · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · [Workflow](../README.md#workflow)
 
 Words used on these pages.
 

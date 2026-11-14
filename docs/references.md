@@ -1,6 +1,6 @@
 # References
 
-[README](../README.md) · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · [Workflow](../README.md#workflow)
 
 The papers and data used on these pages. How to cite this repository is in the
 [README](../README.md).

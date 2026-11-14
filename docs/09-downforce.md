@@ -1,6 +1,6 @@
 # 9. Downforce from the predicted pressure
 
-[README](../README.md) · ← [8. U-Net learning curve](08-unet-learning-curve.md) · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [8. U-Net learning curve](08-unet-learning-curve.md) · [Workflow](../README.md#workflow)
 
 The 1.8% field error hides an 11% error in the downforce computed from the
 predicted pressure: the error sits in the cells next to the wing. We compared
@@ -91,4 +91,4 @@ figures of predicted and simulated flow fields.
 
 ---
 
-[README](../README.md) · ← [8. U-Net learning curve](08-unet-learning-curve.md) · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [8. U-Net learning curve](08-unet-learning-curve.md) · [Workflow](../README.md#workflow)

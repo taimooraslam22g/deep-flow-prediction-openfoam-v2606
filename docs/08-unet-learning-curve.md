@@ -1,6 +1,6 @@
 # 8. Training the U-Net: the learning curve
 
-[README](../README.md) · ← [7. The dataset](07-dataset.md) · [9. Downforce](09-downforce.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [7. The dataset](07-dataset.md) · [9. Downforce](09-downforce.md) → · [Workflow](../README.md#workflow)
 
 We trained the U-Net of the reproduction on the ground-effect samples, from
 random weights and from the free-air model, on 12.5–100% of the 789 training
@@ -88,4 +88,4 @@ points at most):
 
 ---
 
-[README](../README.md) · ← [7. The dataset](07-dataset.md) · [9. Downforce](09-downforce.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [7. The dataset](07-dataset.md) · [9. Downforce](09-downforce.md) → · [Workflow](../README.md#workflow)

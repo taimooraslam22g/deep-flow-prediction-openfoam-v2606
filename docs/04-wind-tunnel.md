@@ -1,6 +1,6 @@
 # 4. Validation in ground effect: the Tyrrell 026 wing
 
-[README](../README.md) · ← [3. Mesh study](03-mesh-study.md) · [5. Airfoil shapes](05-airfoil-shapes.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [3. Mesh study](03-mesh-study.md) · [5. Airfoil shapes](05-airfoil-shapes.md) → · [Workflow](../README.md#workflow)
 
 With the setup checked in free air, we compared it with the wind-tunnel tests of
 the Tyrrell 026 F1 front wing above a moving ground (Zerihan, 2001), at nine
@@ -303,4 +303,4 @@ It is written with 200 points per surface.
 
 ---
 
-[README](../README.md) · ← [3. Mesh study](03-mesh-study.md) · [5. Airfoil shapes](05-airfoil-shapes.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [3. Mesh study](03-mesh-study.md) · [5. Airfoil shapes](05-airfoil-shapes.md) → · [Workflow](../README.md#workflow)

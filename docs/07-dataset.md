@@ -1,6 +1,6 @@
 # 7. The dataset
 
-[README](../README.md) · ← [6. Parameter scan](06-parameter-scan.md) · [8. U-Net learning curve](08-unet-learning-curve.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [6. Parameter scan](06-parameter-scan.md) · [8. U-Net learning curve](08-unet-learning-curve.md) → · [Workflow](../README.md#workflow)
 
 The training data: random airfoils at random angles of attack (0–10°), ride
 heights (h/c 0.05–0.6) and speeds (10–50 m/s), and a test set on 30 airfoils
@@ -34,4 +34,4 @@ made.
 
 ---
 
-[README](../README.md) · ← [6. Parameter scan](06-parameter-scan.md) · [8. U-Net learning curve](08-unet-learning-curve.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [6. Parameter scan](06-parameter-scan.md) · [8. U-Net learning curve](08-unet-learning-curve.md) → · [Workflow](../README.md#workflow)

@@ -1,6 +1,6 @@
 # 3. Mesh study
 
-[README](../README.md) · ← [2. Ground-effect setup and first checks](02-ground-effect-setup.md) · [4. Wind-tunnel validation](04-wind-tunnel.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [2. Ground-effect setup and first checks](02-ground-effect-setup.md) · [4. Wind-tunnel validation](04-wind-tunnel.md) → · [Workflow](../README.md#workflow)
 
 Three rounds of mesh study. Round 1 compared the original mesh with a
 boundary-layer mesh, in a small and a large domain. Round 2 set the first cell
@@ -334,4 +334,4 @@ the dataset.
 
 ---
 
-[README](../README.md) · ← [2. Ground-effect setup and first checks](02-ground-effect-setup.md) · [4. Wind-tunnel validation](04-wind-tunnel.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · ← [2. Ground-effect setup and first checks](02-ground-effect-setup.md) · [4. Wind-tunnel validation](04-wind-tunnel.md) → · [Workflow](../README.md#workflow)

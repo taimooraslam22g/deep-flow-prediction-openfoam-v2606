@@ -20,7 +20,9 @@ simulations are being made.
 
 Words used here are explained in the [glossary](docs/glossary.md).
 
-## How we got here
+## Workflow
+
+The study in nine steps, each with its own page:
 
 1. **[Reproduction](docs/01-reproduction.md):** we first ran the original
    free-air study on current software, to start from a working pipeline and a

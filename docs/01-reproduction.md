@@ -1,6 +1,6 @@
 # 1. Reproduction of Thuerey et al. on OpenFOAM v2606
 
-[README](../README.md) · [2. Ground-effect setup and first checks](02-ground-effect-setup.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · [2. Ground-effect setup and first checks](02-ground-effect-setup.md) → · [Workflow](../README.md#workflow)
 
 We first reproduced the free-air study of Thuerey et al. (2020) on current
 software, to start from a working pipeline and a trusted model. With their data
@@ -168,4 +168,4 @@ Windows-specific issues:
 
 ---
 
-[README](../README.md) · [2. Ground-effect setup and first checks](02-ground-effect-setup.md) → · [All steps](../README.md#how-we-got-here)
+[README](../README.md) · [2. Ground-effect setup and first checks](02-ground-effect-setup.md) → · [Workflow](../README.md#workflow)
