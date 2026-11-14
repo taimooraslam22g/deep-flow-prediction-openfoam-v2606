@@ -1,12 +1,12 @@
 # How to run it
 
-[README](../README.md) · [Reproduction](reproduction.md) · [Ground-effect CFD](cfd_validation.md) · [Dataset](dataset.md) · [U-Net](unet.md) · **How to run it**
+[README](../README.md) · [All steps](../README.md#how-we-got-here)
 
 Every command behind the results on these pages: the Docker image, the original
 free-air pipeline, the ground-effect runs and checks, the airfoil smoothing, the
 dataset, and the training on Kaggle.
 
-*Words used here are explained in the [glossary](../README.md#words-used-here); the references are listed in the [README](../README.md#reference).*
+*Words used here: [glossary](glossary.md). References: [list](references.md).*
 
 **On this page:**
 
@@ -75,7 +75,7 @@ writes `data/airfoils/tyrrell026.dat` (smoothed, used by the runs) and
 ## Airfoil smoothing (on Windows)
 
 The ground-effect dataset uses smoothed airfoil files (see
-[Airfoil shapes](dataset.md#airfoil-shapes-for-the-dataset)). They are made on Windows,
+[Airfoil shapes](05-airfoil-shapes.md)). They are made on Windows,
 because the smoothing needs scipy, which the container does not have:
 ```powershell
 # smooth the airfoil files (a few minutes with 8 cores; the files left out are listed with the reason)
@@ -150,7 +150,7 @@ iteration) and about 21 minutes when Kaggle's two T4s run one each
 If the notebook stops before the end, run the same command again: finished
 runs are skipped.
 
-The loss comparison ([Downforce](unet.md#downforce-from-the-predicted-pressure))
+The loss comparison ([Downforce](09-downforce.md))
 ran in the same notebook, one `learning_curve.py` per loss, for example:
 ```python
 for name, opt in [("cl0.001", "--cl-weight 0.001"), ("wall10", "--wall-weight 10"), ("wall10c1", "--wall-weight 10 --wall-cells 1")]:

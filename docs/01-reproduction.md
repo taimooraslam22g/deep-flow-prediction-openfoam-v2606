@@ -1,14 +1,15 @@
-# Reproduction of Thuerey et al. on OpenFOAM v2606
+# 1. Reproduction of Thuerey et al. on OpenFOAM v2606
 
-[README](../README.md) · **Reproduction** · [Ground-effect CFD](cfd_validation.md) · [Dataset](dataset.md) · [U-Net](unet.md) · [How to run it](howto.md)
+[README](../README.md) · [2. Ground-effect setup and first checks](02-ground-effect-setup.md) → · [All steps](../README.md#how-we-got-here)
 
-We reproduce the free-air study of Thuerey et al. (2020) on current software,
-with their data and network, trained on a laptop CPU. With the paper's training
-length the test error is 2.96% (paper: 2.6%), and the pressure and velocity
-errors match the paper's best model. The original code needed four fixes for
-OpenFOAM v2606 and gmsh 4 (last section).
+We first reproduced the free-air study of Thuerey et al. (2020) on current
+software, to start from a working pipeline and a trusted model. With their data
+and network, trained on a laptop CPU, the test error is 2.96% with the paper's
+training length (paper: 2.6%), and the pressure and velocity errors match the
+paper's best model. The original code needed four fixes for OpenFOAM v2606 and
+gmsh 4 (last section).
 
-*Words used here are explained in the [glossary](../README.md#words-used-here); the references are listed in the [README](../README.md#reference).*
+*Words used here: [glossary](glossary.md). References: [list](references.md).*
 
 **On this page:**
 
@@ -46,6 +47,11 @@ flow, |U| = 30 m/s. The flow separates under the airfoil, visible as reversed
 flow (blue in Ux) and a strong low-pressure region.*
 
 ## Results
+
+The training data are the authors' precomputed dataset `data_6k`, from the
+[TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791) (1.3 GB,
+6,400 training and 90 test samples, SHA-512 verified). The training code
+expects it in `Deep-Flow-Prediction/data/train` and `data/test`.
 
 ### Run 1: U-Net, `expo = 5`, `data_6k`, CPU
 
@@ -159,3 +165,7 @@ Windows-specific issues:
   line endings and fail inside Linux.
 - If pasted commands show up as `[200~...`, run
   `bind 'set enable-bracketed-paste off'` inside the container.
+
+---
+
+[README](../README.md) · [2. Ground-effect setup and first checks](02-ground-effect-setup.md) → · [All steps](../README.md#how-we-got-here)

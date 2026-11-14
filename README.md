@@ -15,6 +15,47 @@ model used as it is. The downforce computed from its pressure is off by 11%,
 and by 7.7% with a loss that counts the cells next to the wing more. More
 simulations are being made.
 
+- Paper: https://arxiv.org/abs/1810.08217
+- Original code: https://github.com/thunil/Deep-Flow-Prediction (Apache-2.0)
+
+Words used here are explained in the [glossary](docs/glossary.md).
+
+## How we got here
+
+1. **[Reproduction](docs/01-reproduction.md):** we first ran the original
+   free-air study on current software, to start from a working pipeline and a
+   trusted model. Its pressure and velocity errors match the paper's.
+2. **[Ground-effect setup and first checks](docs/02-ground-effect-setup.md):**
+   the airfoil upside down above a moving ground. Single test cases set the
+   number of iterations, the incoming turbulence (checked against
+   high-resolution LES) and a faster solver setting.
+3. **[Mesh study](docs/03-mesh-study.md):** three rounds, ending with a mesh on
+   which the downforce is converged (GCI 0.04%) and skin friction matches the
+   LES within 6–7%, and with a convergence test that every run must pass.
+4. **[Wind-tunnel validation](docs/04-wind-tunnel.md):** the Tyrrell 026 F1
+   front wing at nine ride heights. The downforce it gains near the ground
+   matches the tunnel within 4%.
+5. **[Airfoil shapes](docs/05-airfoil-shapes.md):** the wind-tunnel case showed
+   kinks in surfaces built from sparse points, so we smoothed all the airfoil
+   files (1,462 are used).
+6. **[Parameter scan](docs/06-parameter-scan.md):** 200 trial runs showed where
+   steady RANS converges and set the rules for keeping a run.
+7. **[The dataset](docs/07-dataset.md):** 2000 runs so far (1,716 samples), and
+   a test set of 102 samples on 30 airfoils kept out of training.
+8. **[U-Net learning curve](docs/08-unet-learning-curve.md):** with 789 samples
+   the U-Net predicts airfoils it has not seen with a 1.8% error, against 24%
+   for the free-air model as it is.
+9. **[Downforce](docs/09-downforce.md):** the downforce from the predicted
+   pressure is off by 11%, and by 7.7% with a loss that weights the cells next
+   to the wing.
+
+**Now:** 2000 more runs. **Next:** the learning curve again with the new loss;
+ride-height sweeps of two airfoils the U-Net has not seen (the Tyrrell 026 and
+the NACA 4412); figures of predicted and simulated flow fields. All commands
+are in [How to run it](docs/howto.md).
+
+## What the network learns
+
 ![A ground-effect sample: the network's three inputs and the three simulated fields it learns](results/ground_first_sample.png)
 
 *One ground-effect sample: a NACA 23012 upside down at 4°, 0.2 chords above
@@ -22,77 +63,18 @@ the moving ground, at 30 m/s. Top: what the network gets (the oncoming air,
 and where the wing and the ground are). Bottom: what it learns to predict,
 the simulated pressure and velocity.*
 
-- Paper: https://arxiv.org/abs/1810.08217
-- Original code: https://github.com/thunil/Deep-Flow-Prediction (Apache-2.0)
-
 ## Main results
 
 | | Result | Details |
 |---|---|---|
-| Reproduction, free air | 2.96% test error with the paper's training length (paper: 2.6%); pressure and velocity errors as in the paper's best model | [Reproduction](docs/reproduction.md#results) |
-| CFD against high-resolution LES | NACA 4412 in free air: skin friction within 6–7% on average; surface pressure also close (mean \|ΔCp\| 0.009–0.014) | [Mesh study, round 2](docs/cfd_validation.md#mesh-study-round-2) |
-| CFD against the wind tunnel | Tyrrell 026 F1 wing: the downforce gained near the ground within 4% | [Validation in ground effect](docs/cfd_validation.md#validation-in-ground-effect-the-tyrrell-026-wing) |
-| Mesh study | numerical uncertainty of the downforce 0.04–3%, largest closest to the ground | [Mesh study, round 3](docs/cfd_validation.md#mesh-study-round-3-numerical-verification) |
-| Airfoil shapes | 1,462 of the 1,497 UIUC files smoothed: pressure wiggles above 0.1 in 453 files before, in none after | [Airfoil shapes](docs/dataset.md#airfoil-shapes-for-the-dataset) |
-| Where steady RANS converges | Cl becomes steady in 86% of the dataset's runs; close to the ground the flow separates, and part of the range has no steady solution | [Parameter scan](docs/dataset.md#parameter-scan-where-does-steady-rans-converge) |
-| U-Net in ground effect | 1.8% error on 30 unseen airfoils with 789 training samples (the free-air model as it is: 24%) | [Learning curve](docs/unet.md#learning-curve) |
-| Downforce from the U-Net | 11% error; 7.7% with a loss weighted next to the wing | [Downforce](docs/unet.md#downforce-from-the-predicted-pressure) |
-
-## Pages
-
-| Page | What it covers |
-|---|---|
-| [Reproduction](docs/reproduction.md) | the original free-air study on OpenFOAM v2606: three training runs, and the fixes the original code needed |
-| [Ground-effect CFD](docs/cfd_validation.md) | the setup, the solver settings, three rounds of mesh study, and the validation against high-resolution LES and the wind tunnel |
-| [Dataset](docs/dataset.md) | smoothing the airfoil files, the parameter scan (where steady RANS converges), and the samples |
-| [U-Net in ground effect](docs/unet.md) | training, the learning curve, and the downforce from the predicted pressure |
-| [How to run it](docs/howto.md) | every command, from building the Docker image to training on Kaggle |
-
-<a id="words-used-here"></a>
-<details>
-<summary><b>Words used in these pages</b> (click to open)</summary>
-
-| Word | Meaning |
-|---|---|
-| CFD | Computational fluid dynamics: computing airflow on a computer |
-| RANS | Reynolds-averaged Navier–Stokes: computing the average flow, with a turbulence model for the turbulent eddies |
-| OpenFOAM | The free CFD software used here (version v2606) |
-| Mesh, cells | The grid of small cells on which the flow is computed |
-| Boundary layer | The thin layer of slow air next to the wing's surface |
-| y+ | How thin the first cell at the wall is, in the boundary layer's own units. y+ ≈ 1 resolves the layer right down to the wall |
-| Spalart–Allmaras (SA) | The turbulence model used: one extra equation for the turbulent mixing |
-| nuTilda | The quantity that equation solves for. "Clipping" means OpenFOAM resets values that come out negative |
-| Iterations, converged | The solver improves its answer step by step (iterations); a run has converged when the answer stops changing |
-| GCI | Grid convergence index: how much a result could still change on an infinitely fine mesh |
-| LES | Large-eddy simulation: a far more detailed and costly simulation. Our reference is a high-resolution LES, close to DNS (direct numerical simulation, which computes all the turbulent eddies) |
-| Chord (c) | The length of the airfoil from front to back |
-| Ride height (h/c) | The gap between the wing's lowest point and the ground, divided by the chord |
-| Angle of attack (α) | How far the wing is tilted against the oncoming air |
-| Cl, Cd | Downforce (lift) and drag, divided by ½ × air density × speed² × chord, so that cases can be compared. Negative Cl means downforce |
-| Reynolds number (Re) | Speed × chord ÷ the air's viscosity; here 1–5 million |
-| Ground effect | The extra downforce a wing makes close to the ground |
-| Moving ground | The ground moves at the air's speed, as the road does under a car |
-| Separation | Where the air stops following the wing's surface; behind it the flow turns back and becomes unsteady |
-| Sample | One simulation, stored as six 128 × 128 images: 3 inputs (the air's speed, and where the wing and the ground are) and 3 outputs (pressure and the two velocity components) |
-| U-Net | The type of neural network used: it turns input images into output images |
-| Surrogate | A fast model that replaces the slow simulation |
-| Loss (L1) | What training makes small: how far the network's output is from the simulation. L1 is the mean absolute difference |
-
-</details>
-
----
-
-## Progress
-
-| Stage | Status |
-|---|---|
-| 1. Environment (Docker + OpenFOAM v2606 + gmsh + Python) | Done |
-| 2. Port the data generation pipeline to OpenFOAM v2606 | Done |
-| 3. First simulation and training sample | Done (about 95 s per sample on a laptop) |
-| 4. Download the authors' precomputed dataset | Done: `data_6k` from the [TUM data service](https://dataserv.ub.tum.de/index.php/s/m1470791) (1.3 GB, 6,400 train / 90 test, SHA-512 verified). The training code expects it in `Deep-Flow-Prediction/data/train` and `data/test` |
-| 5. Train the U-Net and reproduce the paper's error numbers | Done: 1 run + 5 repeated seeds (CPU, about 47 min each). See [Reproduction](docs/reproduction.md#results) |
-| 6. Compare our results with the paper | Done: 5-seed mean ± std, plus an 80k-iteration run that matches the paper's pressure and velocity errors |
-| 7. Extension: inverted airfoil in ground effect | In progress. Done: simulations checked against high-resolution LES, wind-tunnel data and finer meshes; 1,462 airfoils smoothed; parameter scan (which cases converge, and the rules for keeping them); 2000 training runs (1,716 samples) and the test set (102 samples); learning curve (1.8% test error with 789 training samples); downforce from the predicted pressure (11% error, 7.7% with a loss weighted next to the wing). Now: 2000 more runs. See [Ground-effect CFD](docs/cfd_validation.md), [Dataset](docs/dataset.md) and [U-Net](docs/unet.md) |
+| Reproduction, free air | 2.96% test error with the paper's training length (paper: 2.6%); pressure and velocity errors as in the paper's best model | [Step 1](docs/01-reproduction.md) |
+| CFD against high-resolution LES | NACA 4412 in free air: skin friction within 6–7% on average; surface pressure also close (mean \|ΔCp\| 0.009–0.014) | [Step 3](docs/03-mesh-study.md) |
+| CFD against the wind tunnel | Tyrrell 026 F1 wing: the downforce gained near the ground within 4% | [Step 4](docs/04-wind-tunnel.md) |
+| Mesh study | numerical uncertainty of the downforce 0.04–3%, largest closest to the ground | [Steps 3 and 4](docs/03-mesh-study.md) |
+| Airfoil shapes | 1,462 of the 1,497 UIUC files smoothed: pressure wiggles above 0.1 in 453 files before, in none after | [Step 5](docs/05-airfoil-shapes.md) |
+| Where steady RANS converges | Cl becomes steady in 86% of the dataset's runs; close to the ground the flow separates, and part of the range has no steady solution | [Step 6](docs/06-parameter-scan.md) |
+| U-Net in ground effect | 1.8% error on 30 unseen airfoils with 789 training samples (the free-air model as it is: 24%) | [Step 8](docs/08-unet-learning-curve.md) |
+| Downforce from the U-Net | 11% error; 7.7% with a loss weighted next to the wing | [Step 9](docs/09-downforce.md) |
 
 ---
 
@@ -119,8 +101,8 @@ checks, the dataset and the training) is in [How to run it](docs/howto.md).
 ## Repository layout
 
 ```
-README.md                   this page: summary, results, progress, quick start
-docs/                       the detailed pages: reproduction, ground-effect CFD, dataset, U-Net, how to run it
+README.md                   this page: summary, the steps, results, quick start
+docs/                       one page per step (01-reproduction.md to 09-downforce.md), howto.md, glossary.md, references.md
 Dockerfile                  OpenFOAM v2606 + gmsh + Python environment
 patches/openfoam-v2606.patch  fixes to the original code for OpenFOAM v2606
 scripts/view_sample.py      plots all six channels of a training sample
@@ -182,44 +164,7 @@ https://doi.org/10.5281/zenodo.24176980 (all versions; v0.1.0 is
 https://doi.org/10.5281/zenodo.24176981). GitHub's "Cite this repository"
 button gives the same in other formats.
 
-Other references used in the extension:
-- P. R. Spalart and C. L. Rumsey, "Effective inflow conditions for turbulence
-  models in aerodynamic calculations", *AIAA Journal* 45(10), 2007.
-- R. Vinuesa et al., "Turbulent boundary layers around wing sections up to
-  Re_c = 1,000,000", *International Journal of Heat and Fluid Flow* 72, 2018,
-  https://doi.org/10.1016/j.ijheatfluidflow.2018.04.017 (the high-resolution
-  LES data used for validation: NACA 4412 at 5°, provided by R. Vinuesa).
-- I. B. Celik, U. Ghia, P. J. Roache, C. J. Freitas, H. Coleman and P. E. Raad,
-  "Procedure for estimation and reporting of uncertainty due to discretization
-  in CFD applications", *Journal of Fluids Engineering* 130(7), 078001, 2008
-  (the grid convergence index used in round 3).
-- P. J. Roache, *Verification and Validation in Computational Science and
-  Engineering*, Hermosa Publishers, 1998 (safety factor 3 for the GCI when
-  the observed order is unreliable).
-- J. Zerihan and X. Zhang, "Aerodynamics of a single element wing in ground
-  effect", *Journal of Aircraft* 37(6), 2000 (wind-tunnel tests of an
-  inverted wing above a moving ground; downforce reduction from flow
-  separation at small ride heights).
-- J. Zerihan, *An Investigation into the Aerodynamics of Wings in Ground
-  Effect*, PhD thesis, University of Southampton, 2001 (the Tyrrell 026 wing
-  coordinates, test conditions, sectional downforce, oil flow and 2D RANS
-  results used for the ground-effect validation).
-- C. H. Reinsch, "Smoothing by spline functions", *Numerische Mathematik*
-  10, 1967 (how much a smoothing spline may depart from the data points;
-  used for the Tyrrell 026 coordinates and the dataset airfoils).
-- I. J. Schoenberg, "Spline functions and the problem of graduation",
-  *Proceedings of the National Academy of Sciences* 52(4), 1964 (smoothing
-  splines of higher order: the quintic spline used for the dataset airfoils).
-- P. Dierckx, *Curve and Surface Fitting with Splines*, Oxford University
-  Press, 1993 (FITPACK, used for the arc-length splines).
-- J. L. Hess and A. M. O. Smith, "Calculation of potential flow about
-  arbitrary bodies", *Progress in Aerospace Sciences* 8, 1967 (the panel
-  method in `panel.py`).
-- S. R. Allmaras, F. T. Johnson and P. R. Spalart, "Modifications and
-  clarifications for the implementation of the Spalart-Allmaras turbulence
-  model", Seventh International Conference on Computational Fluid Dynamics
-  (ICCFD7), paper ICCFD7-1902, 2012 (negative values of the model's variable,
-  and the "SA-neg" form that handles them; see the parameter scan).
+Other references used on these pages: [References](docs/references.md).
 
 Airfoil coordinates come from the UIUC Airfoil Coordinates Database
 (https://m-selig.ae.illinois.edu/ads/coord_database.html).
